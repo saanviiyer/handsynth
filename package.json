@@ -1,0 +1,33 @@
+{
+  "name": "handsynth",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Play synth chords from webcam hand gestures — client-only, MediaPipe hand tracking + Web Audio, no backend.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "fetch:model": "node scripts/fetch-model.mjs",
+    "copy:wasm": "node scripts/copy-wasm.mjs",
+    "postinstall": "node scripts/copy-wasm.mjs && node scripts/fetch-model.mjs"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "0.10.14",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.39",
+    "tailwindcss": "^3.4.7",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0",
+    "vitest": "^2.0.5"
+  }
+}

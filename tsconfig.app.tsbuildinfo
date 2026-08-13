@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/legend.tsx","./src/main.tsx","./src/lib/draw.ts","./src/lib/gestures.test.ts","./src/lib/gestures.ts","./src/lib/handlandmarker.ts","./src/lib/mapping.test.ts","./src/lib/mapping.ts","./src/lib/music.test.ts","./src/lib/music.ts","./src/lib/synth.ts","./vite-env.d.ts"],"version":"5.9.3"}
