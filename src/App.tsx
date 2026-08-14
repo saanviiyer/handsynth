@@ -12,6 +12,8 @@ import {
   midiToName,
   keyName,
   parseProgression,
+  SCALES,
+  SCALE_LABELS,
   type ScaleName,
   type ChordExtension,
 } from "./lib/music";
@@ -31,6 +33,12 @@ import {
   type ArpPattern,
   type ArpDivision,
 } from "./lib/arp";
+import {
+  DrumMachine,
+  DRUM_PATTERN_NAMES,
+  type DrumPatternName,
+} from "./lib/drums";
+import { LandmarkSmoother } from "./lib/smoothing";
 import { Vocoder } from "./lib/vocoder";
 import { drawHand } from "./lib/draw";
 import { Legend } from "./Legend";
@@ -57,6 +65,14 @@ function loadPreset(): string {
   } catch {
     return DEFAULT_PRESET;
   }
+}
+
+/** Elapsed milliseconds -> "M:SS" for the recording timer. */
+function formatElapsed(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 function Range({
@@ -156,10 +172,28 @@ export default function App() {
   const landmarkerRef = useRef<HandLandmarker | null>(null);
   const synthRef = useRef<Synth>(new Synth());
   const arpRef = useRef<Arpeggiator | null>(null);
+  const drumsRef = useRef<DrumMachine | null>(null);
   const vocoderRef = useRef<Vocoder | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastVideoTimeRef = useRef<number>(-1);
+
+  // Per-hand landmark smoothers (index 0/1), latch + record state.
+  const smoothersRef = useRef<LandmarkSmoother[]>([
+    new LandmarkSmoother(),
+    new LandmarkSmoother(),
+  ]);
+  const latchedChordRef = useRef<{ notes: number[]; freqs: number[] } | null>(
+    null
+  );
+  const latchedCtrlRef = useRef<{ cutoff: number; expr: number }>({
+    cutoff: 4000,
+    expr: 0.8,
+  });
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordStartRef = useRef<number>(0);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [status, setStatus] = useState<string>("");
@@ -187,6 +221,24 @@ export default function App() {
   const [arpOctaves, setArpOctaves] = useState<number>(1);
   const [arpGate, setArpGate] = useState<number>(0.6);
 
+  // Drum machine + metronome
+  const [drumsOn, setDrumsOn] = useState<boolean>(false);
+  const [drumPattern, setDrumPattern] =
+    useState<DrumPatternName>("Four-on-floor");
+  const [kickOn, setKickOn] = useState<boolean>(true);
+  const [snareOn, setSnareOn] = useState<boolean>(true);
+  const [hatOn, setHatOn] = useState<boolean>(true);
+  const [metronomeOn, setMetronomeOn] = useState<boolean>(false);
+
+  // Playability
+  const [smoothing, setSmoothing] = useState<number>(0.4);
+  const [latchOn, setLatchOn] = useState<boolean>(false);
+
+  // Recording
+  const [recording, setRecording] = useState<boolean>(false);
+  const [recordElapsed, setRecordElapsed] = useState<number>(0);
+  const [recordError, setRecordError] = useState<string>("");
+
   // Vocoder controls
   const [vocoderOn, setVocoderOn] = useState<boolean>(false);
   const [micGain, setMicGain] = useState<number>(1);
@@ -211,6 +263,7 @@ export default function App() {
     extension,
     twoHand,
     arpOn,
+    latchOn,
     progression: progressionSlots.map((s) => s.chord),
   });
   useEffect(() => {
@@ -222,9 +275,30 @@ export default function App() {
       extension,
       twoHand,
       arpOn,
+      latchOn,
       progression: progressionSlots.map((s) => s.chord),
     };
-  }, [mode, tonic, scale, octave, extension, twoHand, arpOn, progressionSlots]);
+  }, [
+    mode,
+    tonic,
+    scale,
+    octave,
+    extension,
+    twoHand,
+    arpOn,
+    latchOn,
+    progressionSlots,
+  ]);
+
+  // Push smoothing amount into the per-hand landmark smoothers.
+  useEffect(() => {
+    for (const s of smoothersRef.current) s.setAmount(smoothing);
+  }, [smoothing]);
+
+  // When latch turns off, drop the held chord.
+  useEffect(() => {
+    if (!latchOn) latchedChordRef.current = null;
+  }, [latchOn]);
 
   // Apply the sound config to the synth and persist it.
   useEffect(() => {
@@ -276,6 +350,27 @@ export default function App() {
     if (arpOn) synthRef.current.releaseAll();
   }, [arpOn]);
 
+  // Keep the drum machine in sync. It shares the transport BPM with the arp.
+  useEffect(() => {
+    const dm = drumsRef.current;
+    if (!dm) return;
+    dm.setBpm(arpBpm);
+    dm.setPattern(drumPattern);
+    dm.setEnables({ kick: kickOn, snare: snareOn, hat: hatOn });
+    dm.setMetronome(metronomeOn);
+    const shouldRun = drumsOn || metronomeOn;
+    if (shouldRun && !dm.isRunning) dm.start();
+    else if (!shouldRun && dm.isRunning) dm.stop();
+  }, [
+    drumsOn,
+    drumPattern,
+    kickOn,
+    snareOn,
+    hatOn,
+    metronomeOn,
+    arpBpm,
+  ]);
+
   useEffect(() => {
     vocoderRef.current?.setMicGain(micGain);
   }, [micGain]);
@@ -308,8 +403,13 @@ export default function App() {
         const hands = result.landmarks ?? [];
         setHandCount(hands.length);
 
+        const tSec = performance.now() / 1000;
         for (let i = 0; i < hands.length; i++) {
-          const lm = hands[i] as Landmark[];
+          // One-Euro smoothing on the raw landmarks (per hand index).
+          const raw = hands[i] as Landmark[];
+          const smoother = smoothersRef.current[i] ?? smoothersRef.current[0];
+          const lm = smoother.filter(raw, tSec) as Landmark[];
+
           const handedness =
             result.handednesses?.[i]?.[0]?.categoryName ?? "Right";
           const isModifier =
@@ -337,17 +437,37 @@ export default function App() {
           progression: c.progression,
         });
 
-        synth.setCutoff(sel.cutoffHz);
-        synth.setExpression(sel.expression);
+        // Chord latch: keep the last chord sounding hands-free until a new
+        // chord is selected or latch is turned off.
+        let notes: number[] = [];
+        let freqs: number[] = [];
+        let cutoff = sel.cutoffHz;
+        let expr = sel.expression;
+        if (!sel.rest && sel.chord) {
+          notes = sel.chord.notes;
+          freqs = sel.chord.freqs;
+          if (c.latchOn) {
+            latchedChordRef.current = { notes, freqs };
+            latchedCtrlRef.current = { cutoff, expr };
+          }
+        } else if (c.latchOn && latchedChordRef.current) {
+          // Hand dropped / fist but latched: hold the chord and its last
+          // expressive settings so it does not mute.
+          notes = latchedChordRef.current.notes;
+          freqs = latchedChordRef.current.freqs;
+          cutoff = latchedCtrlRef.current.cutoff;
+          expr = latchedCtrlRef.current.expr;
+        }
 
-        const notes = sel.rest || !sel.chord ? [] : sel.chord.notes;
+        synth.setCutoff(cutoff);
+        synth.setExpression(expr);
+
         if (c.arpOn) {
           arpRef.current?.setChord(notes);
+          synth.playFreqs([]); // arp handles note-on; keep block chord silent
         } else {
           arpRef.current?.setChord([]); // ensure arp is idle
-          synth.playFreqs(
-            sel.rest || !sel.chord ? [] : sel.chord.freqs
-          );
+          synth.playFreqs(freqs);
         }
 
         setSelection(sel);
@@ -364,7 +484,7 @@ export default function App() {
       synthRef.current.applyConfig(sound);
       synthRef.current.setMasterVolume(volume);
 
-      // Build the arpeggiator now that the AudioContext exists.
+      // Build the arpeggiator + drum machine now that the AudioContext exists.
       const audioCtx = synthRef.current.getContext();
       if (audioCtx && !arpRef.current) {
         arpRef.current = new Arpeggiator(audioCtx, (f, t, g) =>
@@ -378,6 +498,21 @@ export default function App() {
           gate: arpGate,
         });
       }
+      if (audioCtx && !drumsRef.current) {
+        const s = synthRef.current;
+        drumsRef.current = new DrumMachine(audioCtx, {
+          kick: (t) => s.triggerKick(t),
+          snare: (t) => s.triggerSnare(t),
+          hat: (t) => s.triggerHat(t),
+          click: (t, accent) => s.triggerClick(t, accent),
+        });
+        drumsRef.current.setBpm(arpBpm);
+        drumsRef.current.setPattern(drumPattern);
+        drumsRef.current.setEnables({ kick: kickOn, snare: snareOn, hat: hatOn });
+        drumsRef.current.setMetronome(metronomeOn);
+        if (drumsOn || metronomeOn) drumsRef.current.start();
+      }
+      for (const sm of smoothersRef.current) sm.setAmount(smoothing);
 
       setPhase("loading-model");
       landmarkerRef.current = await createHandLandmarker({
@@ -412,7 +547,23 @@ export default function App() {
       setPhase("error");
       setErrorMsg(err instanceof Error ? err.message : String(err));
     }
-  }, [loop, volume, sound, arpPattern, arpDivision, arpBpm, arpOctaves, arpGate]);
+  }, [
+    loop,
+    volume,
+    sound,
+    arpPattern,
+    arpDivision,
+    arpBpm,
+    arpOctaves,
+    arpGate,
+    drumPattern,
+    kickOn,
+    snareOn,
+    hatOn,
+    metronomeOn,
+    drumsOn,
+    smoothing,
+  ]);
 
   // Toggle the vocoder: request mic on enable, crossfade the wet/dry path.
   const toggleVocoder = useCallback(
@@ -456,7 +607,10 @@ export default function App() {
       }
 
       micStreamRef.current = stream;
-      const voc = new Vocoder(audioCtx, carrier, audioCtx.destination, {
+      // Route the vocoder into the synth output bus (not directly to the
+      // destination) so recordings capture the vocoded signal too.
+      const out = synth.getOutputBus() ?? audioCtx.destination;
+      const voc = new Vocoder(audioCtx, carrier, out, {
         bands: 16,
       });
       voc.setModulatorStream(stream);
@@ -468,10 +622,96 @@ export default function App() {
     [micGain]
   );
 
+  // Record the full output (effects + vocoder + drums) via MediaRecorder.
+  const pickMime = (): string => {
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/ogg;codecs=opus",
+    ];
+    for (const m of candidates) {
+      if (
+        typeof MediaRecorder !== "undefined" &&
+        MediaRecorder.isTypeSupported(m)
+      )
+        return m;
+    }
+    return "";
+  };
+
+  const startRecording = useCallback(() => {
+    setRecordError("");
+    const synth = synthRef.current;
+    const stream = synth.getRecordingStream();
+    if (!stream) {
+      setRecordError("Start the app (Enable camera & sound) first.");
+      return;
+    }
+    try {
+      const mimeType = pickMime();
+      const rec = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      rec.onstop = () => {
+        const blob = new Blob(chunksRef.current, {
+          type: rec.mimeType || "audio/webm",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const stamp = new Date()
+          .toISOString()
+          .replace(/[:.]/g, "-")
+          .slice(0, 19);
+        a.href = url;
+        a.download = `handsynth-${stamp}.webm`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      };
+      rec.start();
+      recorderRef.current = rec;
+      recordStartRef.current = performance.now();
+      setRecordElapsed(0);
+      setRecording(true);
+      recordTimerRef.current = setInterval(() => {
+        setRecordElapsed(performance.now() - recordStartRef.current);
+      }, 200);
+    } catch (err) {
+      setRecordError(
+        err instanceof Error ? err.message : "Recording failed to start."
+      );
+    }
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    const rec = recorderRef.current;
+    if (rec && rec.state !== "inactive") rec.stop();
+    recorderRef.current = null;
+    if (recordTimerRef.current) {
+      clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+    setRecording(false);
+  }, []);
+
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       arpRef.current?.stop();
+      drumsRef.current?.stop();
+      if (recordTimerRef.current) clearInterval(recordTimerRef.current);
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+        try {
+          recorderRef.current.stop();
+        } catch {
+          /* ignore */
+        }
+      }
       vocoderRef.current?.dispose();
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
       const v = videoRef.current;
@@ -603,9 +843,9 @@ export default function App() {
               <div>
                 <div className="text-xs uppercase tracking-wide text-white/55">
                   Now playing{" "}
-                  {arpOn && (
-                    <span className="text-orange">· arp</span>
-                  )}
+                  {arpOn && <span className="text-orange">· arp</span>}
+                  {latchOn && <span className="text-yellow"> · latch</span>}
+                  {drumsOn && <span className="text-orange"> · drums</span>}
                   {vocoderOn && (
                     <span className="text-magenta"> · vocoder</span>
                   )}
@@ -726,13 +966,13 @@ export default function App() {
             </h2>
 
             {mode === "diatonic" && (
-              <label className="mb-3 block text-sm">
-                <span className="mb-1 block text-white/70">Key</span>
-                <div className="flex gap-2">
+              <>
+                <label className="mb-3 block text-sm">
+                  <span className="mb-1 block text-white/70">Key</span>
                   <select
                     value={tonic}
                     onChange={(e) => setTonic(Number(e.target.value))}
-                    className="flex-1 rounded-lg border border-purple/50 bg-purple/25 px-2 py-1.5"
+                    className="w-full rounded-lg border border-purple/50 bg-purple/25 px-2 py-1.5"
                   >
                     {NOTE_NAMES.map((n, i) => (
                       <option key={n} value={i}>
@@ -740,16 +980,22 @@ export default function App() {
                       </option>
                     ))}
                   </select>
+                </label>
+                <label className="mb-3 block text-sm">
+                  <span className="mb-1 block text-white/70">Scale</span>
                   <select
                     value={scale}
                     onChange={(e) => setScale(e.target.value as ScaleName)}
-                    className="flex-1 rounded-lg border border-purple/50 bg-purple/25 px-2 py-1.5"
+                    className="w-full rounded-lg border border-purple/50 bg-purple/25 px-2 py-1.5"
                   >
-                    <option value="major">major</option>
-                    <option value="minor">minor</option>
+                    {SCALES.map((s) => (
+                      <option key={s} value={s}>
+                        {SCALE_LABELS[s]}
+                      </option>
+                    ))}
                   </select>
-                </div>
-              </label>
+                </label>
+              </>
             )}
 
             <label className="mb-3 block text-sm">
@@ -831,6 +1077,86 @@ export default function App() {
                   : "(left = slots 6 to 10)"}
               </span>
             </label>
+          </section>
+
+          {/* Record */}
+          <section className="rounded-2xl border border-magenta/30 bg-purple/15 p-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-white/70">
+                Record
+              </h2>
+              <div className="flex items-center gap-3">
+                {recording && (
+                  <span className="flex items-center gap-1.5 text-sm text-orange">
+                    <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-orange" />
+                    {formatElapsed(recordElapsed)}
+                  </span>
+                )}
+                <button
+                  onClick={recording ? stopRecording : startRecording}
+                  disabled={!started}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                    !started
+                      ? "cursor-not-allowed bg-purple/25 text-white/40"
+                      : recording
+                        ? "bg-orange text-ink hover:bg-yellow"
+                        : "bg-magenta text-ink hover:bg-magenta/80"
+                  }`}
+                >
+                  {recording ? "Stop & download" : "Record"}
+                </button>
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-white/55">
+              Captures the full output (synth, effects, vocoder, drums) and
+              downloads a timestamped .webm file.
+            </p>
+            {!started && (
+              <p className="mt-1 text-xs text-white/40">
+                Enable camera &amp; sound first.
+              </p>
+            )}
+            {recordError && (
+              <p className="mt-1 text-xs text-orange">{recordError}</p>
+            )}
+          </section>
+
+          {/* Playability */}
+          <section className="rounded-2xl border border-magenta/30 bg-purple/15 p-4">
+            <details>
+              <summary className="cursor-pointer list-none text-sm font-semibold uppercase tracking-wide text-white/70">
+                Playability
+              </summary>
+              <div className="mt-3">
+                <Range
+                  label="Smoothing / sensitivity"
+                  value={smoothing}
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  fmt={(v) =>
+                    v <= 0 ? "off" : `${(v * 100).toFixed(0)}%`
+                  }
+                  onChange={setSmoothing}
+                />
+                <p className="mb-3 text-xs text-white/55">
+                  One-Euro filter on the hand landmarks. Higher smooths jitter;
+                  lower is more responsive.
+                </p>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={latchOn}
+                    onChange={(e) => setLatchOn(e.target.checked)}
+                  />
+                  Chord latch
+                </label>
+                <p className="mt-1 text-xs text-white/55">
+                  Hold the last chord hands-free until a new chord is played or
+                  latch is turned off. The arpeggiator keeps running on it.
+                </p>
+              </div>
+            </details>
           </section>
 
           {/* Sound design */}
@@ -1170,6 +1496,22 @@ export default function App() {
               </label>
             </div>
 
+            {/* Shared transport tempo (drives arp + drums + metronome). */}
+            <label className="mb-3 block text-sm">
+              <span className="mb-1 block text-white/70">
+                Tempo (shared): {arpBpm} BPM
+              </span>
+              <input
+                type="range"
+                min={60}
+                max={200}
+                step={1}
+                value={arpBpm}
+                onChange={(e) => setArpBpm(Number(e.target.value))}
+                className="w-full"
+              />
+            </label>
+
             <div className={arpOn ? "" : "opacity-50"}>
               <div className="mb-3 text-sm">
                 <span className="mb-1 block text-white/70">Pattern</span>
@@ -1218,22 +1560,6 @@ export default function App() {
 
               <label className="mb-3 block text-sm">
                 <span className="mb-1 block text-white/70">
-                  Tempo: {arpBpm} BPM
-                </span>
-                <input
-                  type="range"
-                  min={60}
-                  max={200}
-                  step={1}
-                  disabled={!arpOn}
-                  value={arpBpm}
-                  onChange={(e) => setArpBpm(Number(e.target.value))}
-                  className="w-full"
-                />
-              </label>
-
-              <label className="mb-3 block text-sm">
-                <span className="mb-1 block text-white/70">
                   Octave range: {arpOctaves}
                 </span>
                 <input
@@ -1264,6 +1590,87 @@ export default function App() {
                 />
               </label>
             </div>
+          </section>
+
+          {/* Drums + metronome */}
+          <section className="rounded-2xl border border-magenta/30 bg-purple/15 p-4">
+            <details>
+              <summary className="cursor-pointer list-none text-sm font-semibold uppercase tracking-wide text-white/70">
+                Drums &amp; metronome
+              </summary>
+              <div className="mt-3">
+                <div className="mb-3 flex items-center gap-4 text-sm">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={drumsOn}
+                      onChange={(e) => setDrumsOn(e.target.checked)}
+                    />
+                    Drums on
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={metronomeOn}
+                      onChange={(e) => setMetronomeOn(e.target.checked)}
+                    />
+                    Metronome
+                  </label>
+                </div>
+
+                <label className="mb-3 block text-sm">
+                  <span className="mb-1 block text-white/70">Pattern</span>
+                  <select
+                    value={drumPattern}
+                    onChange={(e) =>
+                      setDrumPattern(e.target.value as DrumPatternName)
+                    }
+                    className="w-full rounded-lg border border-purple/50 bg-purple/25 px-2 py-1.5"
+                  >
+                    {DRUM_PATTERN_NAMES.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/55">
+                  Instruments
+                </div>
+                <div className="flex flex-wrap gap-4 text-sm">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={kickOn}
+                      onChange={(e) => setKickOn(e.target.checked)}
+                    />
+                    Kick
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={snareOn}
+                      onChange={(e) => setSnareOn(e.target.checked)}
+                    />
+                    Snare
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={hatOn}
+                      onChange={(e) => setHatOn(e.target.checked)}
+                    />
+                    Hi-hat
+                  </label>
+                </div>
+
+                <p className="mt-3 text-xs text-white/55">
+                  Shares the tempo with the arpeggiator (set BPM in the
+                  Arpeggiator panel). Metronome accents beat 1.
+                </p>
+              </div>
+            </details>
           </section>
 
           {/* Vocoder */}

@@ -7,6 +7,7 @@ import {
   parseChord,
   parseProgression,
   voiceParsed,
+  scaleDegreeCount,
   type KeyConfig,
 } from "./music";
 
@@ -299,5 +300,85 @@ describe("parseProgression", () => {
     expect(slots[2].chord).toBeNull();
     expect(slots[0].chord).not.toBeNull();
     expect(slots[3].chord).not.toBeNull();
+  });
+});
+
+describe("expanded scales - degree count", () => {
+  it("7-note modes have 7 degrees, pentatonics have 5", () => {
+    expect(scaleDegreeCount("major")).toBe(7);
+    expect(scaleDegreeCount("dorian")).toBe(7);
+    expect(scaleDegreeCount("harmonicMinor")).toBe(7);
+    expect(scaleDegreeCount("majorPentatonic")).toBe(5);
+    expect(scaleDegreeCount("minorPentatonic")).toBe(5);
+  });
+});
+
+describe("Dorian degree chords (C dorian)", () => {
+  const key: KeyConfig = { tonic: 0, scale: "dorian", octave: 4 };
+  it("i is C minor (C Eb G)", () => {
+    const c = buildChord(key, 0);
+    expect(c.notes).toEqual([60, 63, 67]);
+    expect(c.label).toBe("i");
+    expect(c.name).toBe("C minor");
+  });
+  it("IV is major (F A C) - the Dorian characteristic", () => {
+    const c = buildChord(key, 3);
+    expect(c.notes).toEqual([65, 69, 72]);
+    expect(c.label).toBe("IV");
+    expect(c.name).toBe("F major");
+  });
+});
+
+describe("Harmonic Minor degree chords (C harmonic minor)", () => {
+  const key: KeyConfig = { tonic: 0, scale: "harmonicMinor", octave: 4 };
+  it("i is C minor (C Eb G)", () => {
+    const c = buildChord(key, 0);
+    expect(c.notes).toEqual([60, 63, 67]);
+    expect(c.label).toBe("i");
+  });
+  it("III is augmented (Eb G B)", () => {
+    const c = buildChord(key, 2);
+    expect(c.notes).toEqual([63, 67, 71]);
+    // augmented: major third + augmented fifth
+    expect(c.notes[1] - c.notes[0]).toBe(4);
+    expect(c.notes[2] - c.notes[0]).toBe(8);
+    expect(c.label).toBe("III+");
+  });
+  it("V is major (G B D) - the raised leading tone dominant", () => {
+    const c = buildChord(key, 4);
+    expect(c.notes).toEqual([67, 71, 74]);
+    expect(c.label).toBe("V");
+    expect(c.name).toBe("G major");
+  });
+  it("vii is diminished (B D F)", () => {
+    const c = buildChord(key, 6);
+    expect(c.notes).toEqual([71, 74, 77]);
+    expect(c.label).toBe("vii°");
+  });
+});
+
+describe("Pentatonic degree->chord mapping (C major pentatonic)", () => {
+  const key: KeyConfig = { tonic: 0, scale: "majorPentatonic", octave: 4 };
+  it("has 5 selectable degrees", () => {
+    expect(scaleDegreeCount("majorPentatonic")).toBe(5);
+  });
+  it("degree 0 stacks alternate scale tones: C E A", () => {
+    // majorPentatonic = C D E G A; stacking [0,2,4] gives C, E, A
+    const c = buildChord(key, 0);
+    expect(c.notes).toEqual([60, 64, 69]);
+    expect(c.label).toBe("I");
+    // pitch classes C E A
+    const pc = c.notes.map((n) => n % 12).sort((a, b) => a - b);
+    expect(pc).toEqual([0, 4, 9]);
+  });
+  it("degree wraps within the 5-note scale", () => {
+    // degree 5 == degree 0 (mod 5)
+    expect(buildChord(key, 5).notes).toEqual(buildChord(key, 0).notes);
+  });
+  it("minor pentatonic degree 0 stacks C F Bb", () => {
+    const mk: KeyConfig = { tonic: 0, scale: "minorPentatonic", octave: 4 };
+    const c = buildChord(mk, 0);
+    // minorPentatonic = C Eb F G Bb; stacking [0,2,4] gives C, F, Bb
+    expect(c.notes).toEqual([60, 65, 70]);
   });
 });

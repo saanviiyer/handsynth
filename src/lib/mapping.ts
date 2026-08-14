@@ -5,6 +5,7 @@
 import {
   buildChord,
   voiceParsed,
+  scaleDegreeCount,
   type Chord,
   type ChordExtension,
   type KeyConfig,
@@ -173,7 +174,12 @@ export function mapHandsToSelection(
   // left hand adds +5 so 1 finger -> vi and 2 fingers -> vii; higher counts are
   // clamped to vii (degree 6) so you can't overshoot the scale.
   const degreeOffset = cfg.twoHand ? modifierToSlotOffset(mod) : 0;
-  const degree = clamp(countToDegree(play.extendedCount) + degreeOffset, 0, 6);
+  const maxDegree = scaleDegreeCount(cfg.key.scale) - 1;
+  const degree = clamp(
+    countToDegree(play.extendedCount) + degreeOffset,
+    0,
+    maxDegree
+  );
   const key: KeyConfig = {
     ...cfg.key,
     octave: cfg.key.octave + octaveShift,
