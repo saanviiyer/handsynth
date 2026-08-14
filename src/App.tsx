@@ -677,7 +677,9 @@ export default function App() {
               />
               Two-hand mode{" "}
               <span className="text-xs text-neutral-500">
-                {mode === "diatonic" ? "(left = octave)" : "(left = slots 6–10)"}
+                {mode === "diatonic"
+                  ? "(left open = vi/vii)"
+                  : "(left = slots 6–10)"}
               </span>
             </label>
           </section>

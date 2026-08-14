@@ -7,6 +7,8 @@ const DIATONIC_ROWS: { gesture: string; effect: string }[] = [
   { gesture: "3 fingers", effect: "Chord iii (degree 3)" },
   { gesture: "4 fingers", effect: "Chord IV (degree 4)" },
   { gesture: "5 fingers", effect: "Chord V (degree 5)" },
+  { gesture: "Left open + 1 finger", effect: "Chord vi (two-hand)" },
+  { gesture: "Left open + 2 fingers", effect: "Chord vii (two-hand)" },
   { gesture: "Closed fist", effect: "Rest / mute" },
   { gesture: "Hand left→right", effect: "Inversion (root / 1st / 2nd)" },
   { gesture: "Hand up→down", effect: "Low-pass filter (bright → dark)" },
@@ -44,9 +46,9 @@ export function Legend({
         ))}
         {mode === "diatonic" && twoHand && (
           <li className="flex justify-between gap-3 py-1.5">
-            <span className="text-pink-400">Left hand (open/fist)</span>
+            <span className="text-pink-400">Left hand open</span>
             <span className="text-right text-neutral-500">
-              Octave shift (+1 / −1)
+              +5 degrees → reach vi / vii
             </span>
           </li>
         )}
@@ -59,7 +61,8 @@ export function Legend({
           </>
         ) : (
           <>
-            Right hand plays. In two-hand mode the left hand shifts the octave.
+            Right hand plays I–V. Enable two-hand mode and hold your left hand
+            open to add +5 and reach vi / vii.
           </>
         )}
       </p>

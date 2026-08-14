@@ -74,6 +74,32 @@ describe("diatonic chord construction — C major", () => {
     expect(c.notes[3] - c.notes[0]).toBe(10);
   });
 
+  it("vi is A minor triad A4 C5 E5 (Am)", () => {
+    const c = buildChord(key, 5);
+    expect(c.notes).toEqual([69, 72, 76]);
+    expect(c.label).toBe("vi");
+    expect(c.name).toBe("A minor");
+  });
+
+  it("vii is the diminished triad B4 D5 F5 (Bdim)", () => {
+    const c = buildChord(key, 6);
+    expect(c.notes).toEqual([71, 74, 77]);
+    expect(c.label).toBe("vii°");
+    // diminished: minor third + diminished fifth
+    expect(c.notes[1] - c.notes[0]).toBe(3);
+    expect(c.notes[2] - c.notes[0]).toBe(6);
+  });
+
+  it("vii with 7th is half-diminished B D F A (Bm7b5)", () => {
+    const c = buildChord(key, 6, "7th");
+    expect(c.notes).toEqual([71, 74, 77, 81]);
+    // half-diminished: dim triad + minor 7th (10 semitones over root)
+    expect(c.notes[3] - c.notes[0]).toBe(10);
+    // pitch classes B D F A
+    const pc = c.notes.map((n) => n % 12).sort((a, b) => a - b);
+    expect(pc).toEqual([2, 5, 9, 11]);
+  });
+
   it("chord frequencies match the MIDI notes", () => {
     const c = buildChord(key, 0);
     expect(c.freqs[0]).toBeCloseTo(midiToFreq(60), 6);
