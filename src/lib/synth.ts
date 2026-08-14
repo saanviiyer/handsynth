@@ -45,6 +45,9 @@ export class Synth {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private filter: BiquadFilterNode | null = null;
+  // Final dry bus: master -> dry -> destination. The vocoder crossfades this
+  // against its own wet path (both tap `master` as the carrier).
+  private dry: GainNode | null = null;
   private voices: Voice[] = [];
 
   waveform: Waveform = "sawtooth";
@@ -61,6 +64,19 @@ export class Synth {
 
   get contextState(): AudioContextState | "closed" {
     return this.ctx ? this.ctx.state : "closed";
+  }
+
+  /** The AudioContext, or null if not started. */
+  getContext(): AudioContext | null {
+    return this.ctx;
+  }
+
+  /**
+   * The carrier node for the vocoder: the master output (post volume /
+   * expression, pre-destination). Null if not started.
+   */
+  getCarrierNode(): GainNode | null {
+    return this.master;
   }
 
   /** Create/resume the AudioContext. Must be called from a user gesture. */
@@ -80,12 +96,27 @@ export class Synth {
       this.master = this.ctx.createGain();
       this.master.gain.value = this.masterVolume;
 
+      this.dry = this.ctx.createGain();
+      this.dry.gain.value = 1;
+
       this.filter.connect(this.master);
-      this.master.connect(this.ctx.destination);
+      this.master.connect(this.dry);
+      this.dry.connect(this.ctx.destination);
     }
     if (this.ctx.state === "suspended") {
       await this.ctx.resume();
     }
+  }
+
+  /**
+   * Crossfade the direct (dry) output. The vocoder ramps this to 0 while it
+   * ramps its own wet path up, so toggling does not click.
+   */
+  setDryGain(v: number, timeConstant = 0.04): void {
+    if (!this.ctx || !this.dry) return;
+    const now = this.ctx.currentTime;
+    this.dry.gain.cancelScheduledValues(now);
+    this.dry.gain.setTargetAtTime(Math.max(0, Math.min(1, v)), now, timeConstant);
   }
 
   setWaveform(w: Waveform): void {
@@ -170,6 +201,42 @@ export class Synth {
     }
   }
 
+  /**
+   * Fire a single note at an absolute AudioContext time, held for `gate`
+   * seconds, through the same voice path (ADSR → filter → master). Used by the
+   * arpeggiator scheduler. Fire-and-forget: oscillators stop themselves.
+   */
+  triggerNote(freq: number, atTime: number, gate: number): void {
+    if (!this.ctx || !this.filter) return;
+    const t0 = Math.max(atTime, this.ctx.currentTime);
+    const { attack, decay, sustain, release } = this.env;
+    const peak = 0.6;
+    const gain = this.ctx.createGain();
+    // Keep the whole envelope inside the gate so notes don't overlap-clip.
+    const atk = Math.min(attack, gate * 0.5);
+    const dec = Math.min(decay, gate * 0.5);
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(peak, t0 + atk);
+    gain.gain.exponentialRampToValueAtTime(
+      Math.max(0.0001, peak * sustain),
+      t0 + atk + dec
+    );
+    const relStart = t0 + gate;
+    gain.gain.setValueAtTime(Math.max(0.0001, peak * sustain), relStart);
+    gain.gain.exponentialRampToValueAtTime(0.0001, relStart + release);
+    gain.connect(this.filter);
+
+    for (const sign of [-1, 1]) {
+      const osc = this.ctx.createOscillator();
+      osc.type = this.waveform;
+      osc.frequency.setValueAtTime(freq, t0);
+      osc.detune.setValueAtTime(sign * this.detune, t0);
+      osc.connect(gain);
+      osc.start(t0);
+      osc.stop(relStart + release + 0.02);
+    }
+  }
+
   /** Release all active voices with an envelope release tail. */
   releaseAll(): void {
     if (!this.ctx) {
@@ -200,6 +267,7 @@ export class Synth {
       this.ctx = null;
       this.master = null;
       this.filter = null;
+      this.dry = null;
     }
   }
 }

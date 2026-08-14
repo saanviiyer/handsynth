@@ -2,12 +2,27 @@
 // Kept separate from gesture geometry (gestures.ts) and audio (synth.ts) so the
 // full gesture→chord mapping can be unit tested without a DOM or AudioContext.
 
-import { buildChord, type Chord, type KeyConfig } from "./music";
+import {
+  buildChord,
+  voiceParsed,
+  type Chord,
+  type ChordExtension,
+  type KeyConfig,
+  type ParsedChord,
+} from "./music";
 import type { HandPose } from "./gestures";
 
+export type PlayMode = "diatonic" | "progression";
+
 export interface MappingConfig {
+  mode?: PlayMode;
   key: KeyConfig;
-  seventh: boolean;
+  /** Diatonic mode: chord extension applied to the picked degree. */
+  extension?: ChordExtension;
+  /** Back-compat: boolean seventh (true → "7th"). */
+  seventh?: boolean;
+  /** Progression mode: ordered palette of parsed chords (nulls skipped). */
+  progression?: (ParsedChord | null)[];
   twoHand: boolean;
   filterMinHz?: number;
   filterMaxHz?: number;
@@ -25,8 +40,14 @@ export interface Selection {
   octaveShift: number;
   /** Chord voicing inversion (from hand X). */
   inversion: number;
-  /** Degree index chosen (0..4), -1 when resting. */
+  /** Diatonic: degree 0..4. Progression: selected slot index. -1 when resting. */
   degree: number;
+}
+
+function resolveExtension(cfg: MappingConfig): ChordExtension {
+  if (cfg.extension) return cfg.extension;
+  if (cfg.seventh) return "7th";
+  return "triad";
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -36,6 +57,19 @@ function clamp(v: number, lo: number, hi: number): number {
 /** Extended-finger count 1..5 → scale degree 0..4 (I, ii, iii, IV, V). */
 export function countToDegree(count: number): number {
   return clamp(count, 1, 5) - 1;
+}
+
+/** Extended-finger count 1..5 → palette slot 0..4 (progression mode). */
+export function countToSlot(count: number): number {
+  return clamp(count, 1, 5) - 1;
+}
+
+/**
+ * Progression mode: the modifier (left) hand, held open, shifts the slot
+ * window by +5 so the right hand's 1..5 reaches slots 6..10.
+ */
+export function modifierToSlotOffset(mod: HandPose | null): number {
+  return mod && mod.extendedCount >= 3 ? 5 : 0;
 }
 
 /** Hand X in [0,1] → inversion 0,1,2 (root, 1st, 2nd). */
@@ -79,9 +113,12 @@ export function mapHandsToSelection(
 ): Selection {
   const minHz = cfg.filterMinHz ?? 220;
   const maxHz = cfg.filterMaxHz ?? 6000;
+  const mode: PlayMode = cfg.mode ?? "diatonic";
 
+  // In diatonic mode the modifier hand shifts octave; in progression mode it
+  // shifts the slot window instead (so octave stays put there).
   const octaveShift =
-    cfg.twoHand && mod ? modifierToOctaveShift(mod) : 0;
+    mode === "diatonic" && cfg.twoHand && mod ? modifierToOctaveShift(mod) : 0;
 
   // No hand, or a closed fist -> rest / mute.
   if (!play || play.fist) {
@@ -96,20 +133,52 @@ export function mapHandsToSelection(
     };
   }
 
-  const degree = countToDegree(play.extendedCount);
   const inversion = xToInversion(play.x);
+  const cutoffHz = yToCutoff(play.y, minHz, maxHz);
+  const expression = pinchToExpression(play.pinch);
 
+  if (mode === "progression") {
+    const palette = cfg.progression ?? [];
+    const offset = cfg.twoHand ? modifierToSlotOffset(mod) : 0;
+    const slot = countToSlot(play.extendedCount) + offset;
+    const parsed = palette[slot] ?? null;
+    // Empty / unparseable / out-of-range slot -> rest.
+    if (!parsed) {
+      return {
+        chord: null,
+        rest: true,
+        cutoffHz,
+        expression,
+        octaveShift: 0,
+        inversion,
+        degree: slot,
+      };
+    }
+    const chord = voiceParsed(parsed, cfg.key.octave, inversion);
+    return {
+      chord,
+      rest: false,
+      cutoffHz,
+      expression,
+      octaveShift: 0,
+      inversion,
+      degree: slot,
+    };
+  }
+
+  // Diatonic mode.
+  const degree = countToDegree(play.extendedCount);
   const key: KeyConfig = {
     ...cfg.key,
     octave: cfg.key.octave + octaveShift,
   };
-  const chord = buildChord(key, degree, cfg.seventh, inversion);
+  const chord = buildChord(key, degree, resolveExtension(cfg), inversion);
 
   return {
     chord,
     rest: false,
-    cutoffHz: yToCutoff(play.y, minHz, maxHz),
-    expression: pinchToExpression(play.pinch),
+    cutoffHz,
+    expression,
     octaveShift,
     inversion,
     degree,
