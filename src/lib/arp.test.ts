@@ -22,7 +22,7 @@ describe("expandOctaves", () => {
   });
 });
 
-describe("arpSequence — patterns (1 octave)", () => {
+describe("arpSequence - patterns (1 octave)", () => {
   it("up = ascending", () => {
     expect(arpSequence(CEG, "up", 1)).toEqual([60, 64, 67]);
   });
@@ -37,7 +37,7 @@ describe("arpSequence — patterns (1 octave)", () => {
   });
 });
 
-describe("arpSequence — 2-octave range", () => {
+describe("arpSequence - 2-octave range", () => {
   it("up over 2 octaves", () => {
     expect(arpSequence(CEG, "up", 2)).toEqual([60, 64, 67, 72, 76, 79]);
   });
@@ -51,7 +51,7 @@ describe("arpSequence — 2-octave range", () => {
   });
 });
 
-describe("arpSequence — edge cases", () => {
+describe("arpSequence - edge cases", () => {
   it("single note over 1 octave yields a one-element sequence", () => {
     for (const p of ["up", "down", "updown", "random"] as const) {
       expect(arpSequence([60], p, 1)).toEqual([60]);

@@ -1,4 +1,4 @@
-// draw.ts — canvas overlay for the hand skeleton.
+// draw.ts - canvas overlay for the hand skeleton.
 import type { Landmark } from "./gestures";
 
 // MediaPipe hand connections (pairs of landmark indices).

@@ -1,4 +1,4 @@
-// vocoder.ts — a real Web Audio channel vocoder.
+// vocoder.ts - a real Web Audio channel vocoder.
 //
 // The MICROPHONE is the modulator; the synth master output is the carrier.
 // For each of N log-spaced bands:
