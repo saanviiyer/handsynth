@@ -28,10 +28,14 @@ Other commands:
 ```bash
 npm run build      # tsc + vite build -> dist/ (zero TS errors)
 npm run preview    # serve the production build locally
-npm test           # vitest unit tests (music + gesture logic)
+npm test           # vitest unit tests (music, parser, gestures, arp, mapping)
 ```
 
-## Gesture → chord mapping
+## Two play modes
+
+Switch between them with the **Mode** control.
+
+### 1. Key (diatonic) mode
 
 The **right hand plays**. Chords are diatonic to the selected key/scale.
 
@@ -47,20 +51,103 @@ The **right hand plays**. Chords are diatonic to the selected key/scale.
 | Hand up → down | **Low-pass filter** cutoff (top = bright, bottom = dark) |
 | Pinch thumb + index | **Expression / volume** (open = loud, pinched = quiet) |
 
-**Two-hand mode** (toggle in controls): the **left hand** shifts the octave —
-open hand (≥4 fingers) = **+1 octave**, fist/one finger = **−1 octave** — while
-the right hand plays as above.
+**Two-hand mode** (diatonic): the **left hand** shifts the octave — open hand
+(≥4 fingers) = **+1 octave**, fist/one finger = **−1 octave**.
 
-Scale degrees are stacked as diatonic thirds, so triad quality follows the key
-automatically (e.g. in C major, `V` → G major, `V7` → G dominant seventh). Turn
-on **Sevenths** in the controls to add the diatonic 7th to every chord.
+**Chord extension** control (Triad / 6th / 7th): scale degrees are stacked as
+diatonic thirds, so quality follows the key automatically. The 6th/7th are also
+diatonic — e.g. in C major, `I6` adds A (`C E G A`) and `V7` adds F, giving a
+dominant seventh (`G B D F`); in A minor, `i7` is `A C E G`.
 
-The exact degree/inversion/filter/expression math lives in pure, tested modules:
+### 2. Progression (custom) mode
 
-- `src/lib/music.ts` — equal-temperament note→frequency, scales, diatonic chords
+Type an arbitrary, possibly non-diatonic, named chord sequence — something the
+key/diatonic model can't express (e.g. **E major is non-diatonic to C major**,
+and `vi` isn't even reachable from finger counts). Example:
+
+```
+Am E F C
+```
+
+or `G7 Cmaj7 Dm7 F6`. Tokens are space/comma separated. Each token becomes a
+numbered **slot**; an unrecognized token is flagged in red but the rest still
+play.
+
+| Gesture | Effect |
+| --- | --- |
+| 1–5 fingers | Play **slot 1–5** of your sequence |
+| Closed fist | **Rest / mute** |
+| Left hand open (two-hand mode) | **+5 slot offset** → reach slots 6–10 |
+| Hand left → right | Inversion (still works on parsed chords) |
+| Hand up → down | Low-pass filter |
+| Pinch | Expression / volume |
+
+In progression mode the chord **quality comes from the typed symbol**, so the
+Triad/6th/7th extension control is **disabled** (it would be ambiguous on an
+arbitrary quality).
+
+**Supported chord qualities** (via `parseChord` in `src/lib/music.ts`), roots
+`A`–`G` with `#`/`b`:
+
+| Symbol(s) | Quality | Example notes |
+| --- | --- | --- |
+| `""`, `maj`, `M` | major | `C` → C E G |
+| `m`, `min`, `-` | minor | `Am` → A C E |
+| `dim`, `°` | diminished | `Bdim` → B D F |
+| `aug`, `+` | augmented | `Caug` → C E G# |
+| `sus2` | sus2 | `Dsus2` → D E A |
+| `sus4`, `sus` | sus4 | `Csus4` → C F G |
+| `6` | major 6 | `F6` → F A C D |
+| `m6`, `min6` | minor 6 | `Am6` → A C E F# |
+| `7`, `dom7` | dominant 7 | `G7` → G B D F |
+| `maj7`, `M7`, `Δ` | major 7 | `Cmaj7` → C E G B |
+| `m7`, `min7` | minor 7 | `Dm7` → D F A C |
+| `m7b5`, `ø` | half-diminished 7 | `Bm7b5` → B D F A |
+| `dim7`, `°7` | diminished 7 | `Bdim7` → B D F Ab |
+
+## Arpeggiator
+
+Toggle **Arpeggiator** to play the currently-held chord one note at a time in a
+repeating pattern instead of as a block. It works in **both** modes and follows
+whatever chord your gesture is selecting, switching cleanly when the chord
+changes and stopping on fist/rest.
+
+Controls: **Pattern** (Up / Down / Up-Down / Random), **Rate** (1/4, 1/8, 1/16,
+and 1/8 · 1/16 triplets), **Tempo** (60–200 BPM), **Octave range** (1–3), and a
+**Gate** (note length). Timing uses a proper Web Audio *lookahead scheduler*
+("A Tale of Two Clocks"): a 25 ms timer schedules notes ~100 ms ahead against
+`AudioContext.currentTime`, so it stays tight. Arpeggiated notes run through the
+same voice path (ADSR → filter → master), so the hand-Y filter and the vocoder
+still apply. The pure sequence generator (`arpSequence` in `src/lib/arp.ts`) is
+unit tested.
+
+## Vocoder
+
+Toggle **Vocoder** to run the synth through a real Web Audio **channel
+vocoder**: your **microphone is the modulator** and the **synth is the
+carrier** — talk or sing and the chords take on the shape of your voice.
+
+Implementation (`src/lib/vocoder.ts`): a bank of **16 bandpass filters**
+log-spaced ~120 Hz → ~7 kHz. For each band, the mic signal is band-passed →
+**rectified** (a `WaveShaper` with an `x → |x|` curve) → smoothed by a low-pass
+**envelope follower** (~18 Hz); that envelope drives the **gain of the carrier**
+passed through the matching band. All bands sum to the output. A **dry/wet
+crossfade** (`Synth.setDryGain` ↔ the vocoder's wet gain, both ramped) makes
+enabling/disabling click-free. A **Voice sensitivity** slider scales the mic
+gain. If mic permission is denied it falls back to direct play and shows a clear
+message (mirroring the camera-denied handling).
+
+## Code layout
+
+The pure, testable logic lives under `src/lib/`:
+
+- `src/lib/music.ts` — note→frequency, scales, diatonic chords + 6th/7th
+  extensions, and the `parseChord` / `parseProgression` chord-symbol parser
 - `src/lib/gestures.ts` — finger-extended detection, pinch, normalized hand X/Y
-- `src/lib/mapping.ts` — hand pose(s) → chord selection
-- `src/lib/synth.ts` — polyphonic Web Audio engine (ADSR, filter, master gain)
+- `src/lib/mapping.ts` — hand pose(s) → chord selection (diatonic & progression)
+- `src/lib/arp.ts` — arpeggiator sequence generator + lookahead scheduler
+- `src/lib/synth.ts` — polyphonic Web Audio engine (ADSR, filter, master, dry bus)
+- `src/lib/vocoder.ts` — channel vocoder audio graph
 - `src/lib/handLandmarker.ts` — MediaPipe init with local-then-CDN asset loading
 
 ## How the model / WASM are wired for deploy
