@@ -52,27 +52,49 @@ export function noteToFreq(pitchClass: number, octave: number): number {
 // Scales
 // ---------------------------------------------------------------------------
 
-export type ScaleName = "major" | "minor";
+export type ScaleName =
+  | "major"
+  | "minor"
+  | "dorian"
+  | "phrygian"
+  | "lydian"
+  | "mixolydian"
+  | "harmonicMinor"
+  | "majorPentatonic"
+  | "minorPentatonic";
 
-// Semitone offsets from the tonic.
+// Semitone offsets from the tonic. 7-note modes plus two 5-note pentatonics.
 export const SCALE_INTERVALS: Record<ScaleName, number[]> = {
-  major: [0, 2, 4, 5, 7, 9, 11],
-  // natural minor
-  minor: [0, 2, 3, 5, 7, 8, 10],
+  major: [0, 2, 4, 5, 7, 9, 11], // Ionian
+  minor: [0, 2, 3, 5, 7, 8, 10], // Aeolian (natural minor)
+  dorian: [0, 2, 3, 5, 7, 9, 10],
+  phrygian: [0, 1, 3, 5, 7, 8, 10],
+  lydian: [0, 2, 4, 6, 7, 9, 11],
+  mixolydian: [0, 2, 4, 5, 7, 9, 10],
+  harmonicMinor: [0, 2, 3, 5, 7, 8, 11],
+  majorPentatonic: [0, 2, 4, 7, 9],
+  minorPentatonic: [0, 3, 5, 7, 10],
 };
 
-// Diatonic triad quality per scale degree (0-indexed degree).
-// Major: I ii iii IV V vi vii°
-// Minor: i ii° III iv v VI VII
-export const DIATONIC_QUALITY: Record<ScaleName, ChordQuality[]> = {
-  major: ["maj", "min", "min", "maj", "maj", "min", "dim"],
-  minor: ["min", "dim", "maj", "min", "min", "maj", "maj"],
+// Human-readable labels for the scale selector.
+export const SCALE_LABELS: Record<ScaleName, string> = {
+  major: "Major (Ionian)",
+  minor: "Natural Minor (Aeolian)",
+  dorian: "Dorian",
+  phrygian: "Phrygian",
+  lydian: "Lydian",
+  mixolydian: "Mixolydian",
+  harmonicMinor: "Harmonic Minor",
+  majorPentatonic: "Major Pentatonic",
+  minorPentatonic: "Minor Pentatonic",
 };
 
-export const ROMAN_NUMERALS: Record<ScaleName, string[]> = {
-  major: ["I", "ii", "iii", "IV", "V", "vi", "vii°"],
-  minor: ["i", "ii°", "III", "iv", "v", "VI", "VII"],
-};
+export const SCALES: ScaleName[] = Object.keys(SCALE_INTERVALS) as ScaleName[];
+
+/** Number of degrees in a scale (7 for modes, 5 for pentatonics). */
+export function scaleDegreeCount(scale: ScaleName): number {
+  return SCALE_INTERVALS[scale].length;
+}
 
 // ---------------------------------------------------------------------------
 // Chords
@@ -88,13 +110,41 @@ export const TRIAD_INTERVALS: Record<ChordQuality, number[]> = {
   aug: [0, 4, 8],
 };
 
-/** Semitone offset of the i-th scale degree above the tonic (i may exceed 6). */
+/** Semitone offset of the i-th scale degree above the tonic (i may wrap octaves). */
 function scaleDegreeSemitone(scale: ScaleName, i: number): number {
   const steps = SCALE_INTERVALS[scale];
-  const n = steps.length; // 7
+  const n = steps.length; // 7 or 5
   const octaves = Math.floor(i / n);
   const idx = ((i % n) + n) % n;
   return steps[idx] + 12 * octaves;
+}
+
+// Base roman numerals by degree index (case/suffix applied from triad quality).
+const ROMAN_BASE = ["I", "II", "III", "IV", "V", "VI", "VII"];
+
+interface TriadClass {
+  word: string; // for the display name, e.g. "minor"
+  numeral: string; // full roman incl. case + suffix, e.g. "ii", "vii°", "III+"
+}
+
+/**
+ * Classify a triad from the semitone size of its third and fifth above the
+ * root, producing a display word and a roman numeral. Works for any scale
+ * (7-note modes and pentatonic stacks), so quality follows the selected scale.
+ */
+function classifyTriad(deg: number, third: number, fifth: number): TriadClass {
+  const base = ROMAN_BASE[deg % ROMAN_BASE.length];
+  const lower = base.toLowerCase();
+  if (third === 4 && fifth === 7) return { word: "major", numeral: base };
+  if (third === 3 && fifth === 7) return { word: "minor", numeral: lower };
+  if (third === 3 && fifth === 6)
+    return { word: "dim", numeral: `${lower}°` };
+  if (third === 4 && fifth === 8)
+    return { word: "aug", numeral: `${base}+` };
+  if (third === 2 && fifth === 7) return { word: "sus2", numeral: base };
+  if (third === 5 && fifth === 7) return { word: "sus4", numeral: base };
+  // Fallback for unusual pentatonic stacks: label by the interval sizes.
+  return { word: "", numeral: base };
 }
 
 export interface Chord {
@@ -117,13 +167,6 @@ export interface KeyConfig {
   /** Octave of the tonic for degree 0 chords, e.g. 3 or 4. */
   octave: number;
 }
-
-const QUALITY_WORD: Record<ChordQuality, string> = {
-  maj: "major",
-  min: "minor",
-  dim: "dim",
-  aug: "aug",
-};
 
 /**
  * Chord extension applied on top of the diatonic triad:
@@ -169,18 +212,26 @@ export function buildChord(
   extension: boolean | ChordExtension = "triad",
   inversion = 0
 ): Chord {
-  const deg = ((degree % 7) + 7) % 7;
+  const n = scaleDegreeCount(key.scale);
+  const deg = ((degree % n) + n) % n;
   const ext = normalizeExtension(extension);
-  const quality = DIATONIC_QUALITY[key.scale][deg];
   const base = pitchToMidi(key.tonic, key.octave);
 
   const rootMidi = base + scaleDegreeSemitone(key.scale, deg);
 
-  // Stack diatonic scale-degrees. Diatonic stacking keeps every added tone in
-  // the selected key, so e.g. in C major the 6th on I is A and the 7th on V is
-  // F (→ a dominant seventh).
+  // Stack diatonic scale-degrees within the selected scale. Diatonic stacking
+  // keeps every added tone in the key, so quality follows the scale (e.g. in C
+  // major the 7th on V is F, a dominant seventh; in a pentatonic scale the
+  // stacks form open, sixth/quartal-flavored voicings on alternate scale tones).
   const stack = EXTENSION_STACK[ext];
   let notes = stack.map((k) => base + scaleDegreeSemitone(key.scale, deg + k));
+
+  // Classify from the root-position triad (before inversion re-voices it).
+  const third =
+    scaleDegreeSemitone(key.scale, deg + 2) - scaleDegreeSemitone(key.scale, deg);
+  const fifth =
+    scaleDegreeSemitone(key.scale, deg + 4) - scaleDegreeSemitone(key.scale, deg);
+  const cls = classifyTriad(deg, third, fifth);
 
   // Apply inversion: lift the lowest `inversion` tones up an octave.
   const inv = ((inversion % notes.length) + notes.length) % notes.length;
@@ -190,9 +241,11 @@ export function buildChord(
   notes = [...notes].sort((a, b) => a - b);
 
   const suffix = EXTENSION_SUFFIX[ext];
-  const roman = ROMAN_NUMERALS[key.scale][deg] + suffix;
+  const roman = cls.numeral + suffix;
   const rootName = NOTE_NAMES[((rootMidi % 12) + 12) % 12];
-  const name = `${rootName} ${QUALITY_WORD[quality]}${suffix ? " " + suffix : ""}`;
+  const name =
+    `${rootName}${cls.word ? " " + cls.word : ""}` +
+    (suffix ? " " + suffix : "");
 
   return {
     label: roman,
@@ -203,9 +256,9 @@ export function buildChord(
   };
 }
 
-/** Convenience: display name for a key, e.g. "C major". */
+/** Convenience: display name for a key, e.g. "C Major (Ionian)". */
 export function keyName(key: KeyConfig): string {
-  return `${NOTE_NAMES[((key.tonic % 12) + 12) % 12]} ${key.scale}`;
+  return `${NOTE_NAMES[((key.tonic % 12) + 12) % 12]} ${SCALE_LABELS[key.scale]}`;
 }
 
 export const ALL_KEYS: NoteName[] = [...NOTE_NAMES];

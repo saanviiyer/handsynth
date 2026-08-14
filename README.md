@@ -71,6 +71,21 @@ diatonic thirds, so quality follows the key automatically. The 6th/7th are also
 diatonic, e.g. in C major, `I6` adds A (`C E G A`) and `V7` adds F, giving a
 dominant seventh (`G B D F`); in A minor, `i7` is `A C E G`.
 
+**Scale** selector (next to Key): choose the scale the degrees are built from.
+Available scales:
+
+- Major (Ionian), Natural Minor (Aeolian)
+- Dorian, Phrygian, Lydian, Mixolydian
+- Harmonic Minor
+- Major Pentatonic, Minor Pentatonic
+
+For the 7-note modes the degree chords stack diatonic thirds within that scale,
+so quality adapts automatically: e.g. Dorian's `IV` is major, Harmonic Minor's
+`III` is augmented and its `V` is major. The two pentatonic scales have **5
+degrees** (fingers 1 to 5 map straight to them); their chords stack alternate
+scale tones (degree, +2, +4 within the 5-note scale), producing open,
+sixth/quartal-flavored voicings (e.g. C major pentatonic degree 1 is `C E A`).
+
 ### 2. Progression (custom) mode
 
 Type an arbitrary, possibly non-diatonic, named chord sequence, something the
@@ -125,13 +140,54 @@ whatever chord your gesture is selecting, switching cleanly when the chord
 changes and stopping on fist/rest.
 
 Controls: **Pattern** (Up / Down / Up-Down / Random), **Rate** (1/4, 1/8, 1/16,
-and 1/8 · 1/16 triplets), **Tempo** (60-200 BPM), **Octave range** (1-3), and a
-**Gate** (note length). Timing uses a proper Web Audio *lookahead scheduler*
-("A Tale of Two Clocks"): a 25 ms timer schedules notes ~100 ms ahead against
-`AudioContext.currentTime`, so it stays tight. Arpeggiated notes run through the
-same voice path (ADSR → filter → master), so the hand-Y filter and the vocoder
-still apply. The pure sequence generator (`arpSequence` in `src/lib/arp.ts`) is
-unit tested.
+and 1/8 · 1/16 triplets), **Tempo** (60-200 BPM, the shared transport tempo),
+**Octave range** (1-3), and a **Gate** (note length). Timing uses a proper Web
+Audio *lookahead scheduler* ("A Tale of Two Clocks"): a 25 ms timer schedules
+notes ~100 ms ahead against `AudioContext.currentTime`, so it stays tight.
+Arpeggiated notes run through the same voice path (ADSR, filter, master), so the
+hand-Y filter and the vocoder still apply. The pure sequence generator
+(`arpSequence` in `src/lib/arp.ts`) is unit tested.
+
+## Drums and metronome
+
+The **Drums & metronome** panel adds a small synthesized drum machine (no
+samples): **kick** (pitch-swept sine), **snare** (filtered noise burst plus a
+tonal snap), and **hi-hat** (short high-passed noise). Toggle **Drums on**, pick
+a **Pattern**, and enable/disable each **instrument** independently.
+
+Patterns (one bar of 16 steps each): **Off**, **Four-on-floor** (kick every
+quarter, snare on 2 and 4, hats on 8ths), **Boom-bap** (kick on 1 and the "and"
+of 3, snare on 2 and 4), and **Hi-hat 8ths**. A **Metronome** toggle clicks on
+every quarter and **accents beat 1**.
+
+The drums and metronome run on the same lookahead scheduler as the arpeggiator
+and **share its Tempo (BPM)**, so everything stays locked to one transport. Drum
+voices route to a dedicated bus (dry, so the synth filter/effects do not color
+them) and are included in recordings. Pattern data and step logic are pure and
+unit tested in `src/lib/drums.ts`.
+
+## Recording
+
+Press **Record** to capture the live output and **Stop & download** to save a
+timestamped `handsynth-YYYY-MM-DDTHH-MM-SS.webm` file. Recording taps a
+`MediaStreamAudioDestinationNode` off the synth output bus and uses
+`MediaRecorder` (`audio/webm; codecs=opus` when supported). Because the output
+bus carries the **full chain** (synth + effects + vocoder + drums), the take
+captures everything you hear, and normal playback continues while recording. A
+red indicator shows the elapsed time.
+
+## Playability
+
+The **Playability** panel has two aids:
+
+- **Smoothing / sensitivity**: a One-Euro filter on the hand landmarks that
+  kills jitter when the hand is still but stays responsive when it moves. Higher
+  is smoother, lower is snappier, `0` is off. The pure filter math lives in
+  `src/lib/smoothing.ts` and is unit tested.
+- **Chord latch**: when on, the last chord keeps sounding after your hand drops,
+  opens, or makes a fist, so you can adjust controls hands-free. It holds until
+  you play a **new** chord or turn latch off. The arpeggiator keeps running on
+  the latched chord.
 
 ## Vocoder
 
@@ -208,9 +264,12 @@ The pure, testable logic lives under `src/lib/`:
 - `src/lib/gestures.ts`: finger-extended detection, pinch, normalized hand X/Y
 - `src/lib/mapping.ts`: hand pose(s) to chord selection (diatonic + progression)
 - `src/lib/arp.ts`: arpeggiator sequence generator + lookahead scheduler
+- `src/lib/drums.ts`: drum patterns/step logic + drum-machine scheduler (pure
+  data tested)
+- `src/lib/smoothing.ts`: One-Euro filter + EMA landmark smoothing (pure, tested)
 - `src/lib/presets.ts`: sound-preset tables + param helpers (pure, tested)
 - `src/lib/synth.ts`: polyphonic Web Audio engine (unison, sub, ADSR, filter,
-  LFO, effects chain, master + dry bus)
+  LFO, effects chain, drum voices, master + dry + record bus)
 - `src/lib/vocoder.ts`: channel vocoder audio graph
 - `src/lib/handLandmarker.ts`: MediaPipe init with local-then-CDN asset loading
 

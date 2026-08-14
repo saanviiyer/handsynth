@@ -97,6 +97,13 @@ export class Synth {
   private master: GainNode | null = null;
   private filter: BiquadFilterNode | null = null;
   private dry: GainNode | null = null;
+  // Output bus that both the dry path and the vocoder wet path feed, and which
+  // the recorder taps, so a recording captures the full chain (effects +
+  // vocoder + drums).
+  private recordBus: GainNode | null = null;
+  private drumBus: GainNode | null = null;
+  private recorderDest: MediaStreamAudioDestinationNode | null = null;
+  private noiseBuf: AudioBuffer | null = null;
   private voices: Voice[] = [];
 
   // Effects chain
@@ -254,8 +261,17 @@ export class Synth {
       this.delay.output.connect(this.reverb.input);
       this.reverb.output.connect(this.tremolo);
       this.tremolo.connect(this.master);
+
+      // Output bus: master -> dry -> recordBus -> destination. The vocoder wet
+      // path and the drum bus also feed recordBus, so recording captures them.
+      this.recordBus = ctx.createGain();
       this.master.connect(this.dry);
-      this.dry.connect(ctx.destination);
+      this.dry.connect(this.recordBus);
+      this.recordBus.connect(ctx.destination);
+
+      this.drumBus = ctx.createGain();
+      this.drumBus.gain.value = 0.9;
+      this.drumBus.connect(this.recordBus);
     }
     if (this.ctx.state === "suspended") {
       await this.ctx.resume();
@@ -556,6 +572,126 @@ export class Synth {
     this.currentFreqs = [];
   }
 
+  /**
+   * The output bus that carries the full mix (dry synth + vocoder + drums).
+   * The vocoder should connect its wet path here so recording captures it.
+   */
+  getOutputBus(): GainNode | null {
+    return this.recordBus;
+  }
+
+  /**
+   * A MediaStream of the full output for recording. Created lazily and kept
+   * connected; capturing it does not affect normal playback.
+   */
+  getRecordingStream(): MediaStream | null {
+    if (!this.ctx || !this.recordBus) return null;
+    if (!this.recorderDest) {
+      this.recorderDest = this.ctx.createMediaStreamDestination();
+      this.recordBus.connect(this.recorderDest);
+    }
+    return this.recorderDest.stream;
+  }
+
+  private noise(): AudioBuffer {
+    const ctx = this.ctx!;
+    if (!this.noiseBuf) {
+      const len = Math.floor(ctx.sampleRate * 1.0);
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      this.noiseBuf = buf;
+    }
+    return this.noiseBuf;
+  }
+
+  // --- Synthesized drum voices (route to the drum bus, dry, so they are
+  // recorded but not colored by the synth filter/effects). ---
+
+  triggerKick(t0: number): void {
+    if (!this.ctx || !this.drumBus) return;
+    const ctx = this.ctx;
+    const t = Math.max(t0, ctx.currentTime);
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(130, t);
+    osc.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.9, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
+    osc.connect(g);
+    g.connect(this.drumBus);
+    osc.start(t);
+    osc.stop(t + 0.36);
+  }
+
+  triggerSnare(t0: number): void {
+    if (!this.ctx || !this.drumBus) return;
+    const ctx = this.ctx;
+    const t = Math.max(t0, ctx.currentTime);
+    // Noise body.
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise();
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 1200;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.7, t);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+    src.connect(hp);
+    hp.connect(ng);
+    ng.connect(this.drumBus);
+    src.start(t);
+    src.stop(t + 0.22);
+    // Tonal snap.
+    const osc = ctx.createOscillator();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(180, t);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.4, t);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
+    osc.connect(og);
+    og.connect(this.drumBus);
+    osc.start(t);
+    osc.stop(t + 0.12);
+  }
+
+  triggerHat(t0: number): void {
+    if (!this.ctx || !this.drumBus) return;
+    const ctx = this.ctx;
+    const t = Math.max(t0, ctx.currentTime);
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise();
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 7000;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.3, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+    src.connect(hp);
+    hp.connect(g);
+    g.connect(this.drumBus);
+    src.start(t);
+    src.stop(t + 0.06);
+  }
+
+  triggerClick(t0: number, accent: boolean): void {
+    if (!this.ctx || !this.drumBus) return;
+    const ctx = this.ctx;
+    const t = Math.max(t0, ctx.currentTime);
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(accent ? 1600 : 1000, t);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(accent ? 0.4 : 0.25, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
+    osc.connect(g);
+    g.connect(this.drumBus);
+    osc.start(t);
+    osc.stop(t + 0.04);
+  }
+
   /** Fully tear down the audio graph. */
   async close(): Promise<void> {
     this.releaseAll();
@@ -565,6 +701,10 @@ export class Synth {
       this.master = null;
       this.filter = null;
       this.dry = null;
+      this.recordBus = null;
+      this.drumBus = null;
+      this.recorderDest = null;
+      this.noiseBuf = null;
     }
   }
 }
