@@ -46,13 +46,25 @@ The **right hand plays**. Chords are diatonic to the selected key/scale.
 | 3 fingers | Chord **iii** (degree 3) |
 | 4 fingers | Chord **IV** (degree 4) |
 | 5 fingers | Chord **V** (degree 5) |
+| Left hand open + 1 finger | Chord **vi** (degree 6, two-hand) |
+| Left hand open + 2 fingers | Chord **vii** (degree 7, two-hand) |
 | Closed fist | **Rest / mute** |
 | Hand left → right | Chord **inversion** (root → 1st → 2nd) |
 | Hand up → down | **Low-pass filter** cutoff (top = bright, bottom = dark) |
 | Pinch thumb + index | **Expression / volume** (open = loud, pinched = quiet) |
 
-**Two-hand mode** (diatonic): the **left hand** shifts the octave — open hand
-(≥4 fingers) = **+1 octave**, fist/one finger = **−1 octave**.
+**All seven diatonic degrees are reachable.** A single right hand plays **I–V**
+with 1–5 fingers. To reach **vi** and **vii**, enable **two-hand mode** and hold
+your **left hand open** (≥3 fingers): that adds **+5** to the degree index, so
+right-hand 1 finger → vi and 2 fingers → vii. Higher counts clamp to vii (you
+can't overshoot the scale). `vii` uses the correct diatonic stacking — in a
+major key that's the **diminished** triad (C major `vii` = `Bdim`), and with the
+7th extension it's the **half-diminished** `vii7` = `Bm7b5` (`B D F A`).
+
+> **Reconciliation note:** the two-hand modifier used to shift the octave in
+> diatonic mode. It now adds the +5 degree offset instead (the same mechanism
+> progression mode uses for slots 6–10), prioritizing access to all seven
+> degrees. Octave is still set by the **Base octave** control.
 
 **Chord extension** control (Triad / 6th / 7th): scale degrees are stacked as
 diatonic thirds, so quality follows the key automatically. The 6th/7th are also

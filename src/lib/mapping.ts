@@ -115,10 +115,13 @@ export function mapHandsToSelection(
   const maxHz = cfg.filterMaxHz ?? 6000;
   const mode: PlayMode = cfg.mode ?? "diatonic";
 
-  // In diatonic mode the modifier hand shifts octave; in progression mode it
-  // shifts the slot window instead (so octave stays put there).
-  const octaveShift =
-    mode === "diatonic" && cfg.twoHand && mod ? modifierToOctaveShift(mod) : 0;
+  // The two-hand modifier now serves the SAME role in both modes: an open left
+  // hand adds a +5 offset to the right hand's index. In diatonic mode this
+  // reaches degrees vi/vii; in progression mode it reaches slots 6–10. (This
+  // replaces the previous two-hand octave-shift in diatonic mode, prioritizing
+  // access to all seven diatonic degrees.) octaveShift is retained on the
+  // Selection for back-compat but is always 0.
+  const octaveShift = 0;
 
   // No hand, or a closed fist -> rest / mute.
   if (!play || play.fist) {
@@ -166,8 +169,11 @@ export function mapHandsToSelection(
     };
   }
 
-  // Diatonic mode.
-  const degree = countToDegree(play.extendedCount);
+  // Diatonic mode. Right-hand 1..5 -> degrees I..V. With two-hand mode, an open
+  // left hand adds +5 so 1 finger -> vi and 2 fingers -> vii; higher counts are
+  // clamped to vii (degree 6) so you can't overshoot the scale.
+  const degreeOffset = cfg.twoHand ? modifierToSlotOffset(mod) : 0;
+  const degree = clamp(countToDegree(play.extendedCount) + degreeOffset, 0, 6);
   const key: KeyConfig = {
     ...cfg.key,
     octave: cfg.key.octave + octaveShift,

@@ -62,14 +62,46 @@ describe("mapHandsToSelection", () => {
     expect(sel.rest).toBe(true);
   });
 
-  it("two-hand: open modifier hand raises octave", () => {
+  it("two-hand diatonic: open left hand + 1 finger => vi (Am)", () => {
     const sel = mapHandsToSelection(
-      pose({ extendedCount: 5, x: 0.1 }),
+      pose({ extendedCount: 1, x: 0.1 }),
       pose({ extendedCount: 5 }),
       { ...cfg, twoHand: true }
     );
-    expect(sel.octaveShift).toBe(1);
-    // V chord an octave up from base 4: G5 B5 D6 = 79,83,86
-    expect(sel.chord?.notes).toEqual([79, 83, 86]);
+    expect(sel.octaveShift).toBe(0); // octave shift replaced by degree offset
+    expect(sel.degree).toBe(5);
+    expect(sel.chord?.label).toBe("vi");
+    expect(sel.chord?.notes).toEqual([69, 72, 76]); // A4 C5 E5 = Am
+  });
+
+  it("two-hand diatonic: open left hand + 2 fingers => vii (Bdim)", () => {
+    const sel = mapHandsToSelection(
+      pose({ extendedCount: 2, x: 0.1 }),
+      pose({ extendedCount: 5 }),
+      { ...cfg, twoHand: true }
+    );
+    expect(sel.degree).toBe(6);
+    expect(sel.chord?.label).toBe("vii°");
+    expect(sel.chord?.notes).toEqual([71, 74, 77]); // B4 D5 F5 = Bdim
+  });
+
+  it("two-hand diatonic: degree offset clamps at vii (no overshoot)", () => {
+    const sel = mapHandsToSelection(
+      pose({ extendedCount: 5, x: 0.1 }), // 4 + 5 = 9 -> clamp 6
+      pose({ extendedCount: 5 }),
+      { ...cfg, twoHand: true }
+    );
+    expect(sel.degree).toBe(6);
+    expect(sel.chord?.label).toBe("vii°");
+  });
+
+  it("two-hand diatonic: a closed/low left hand adds no offset (still I–V)", () => {
+    const sel = mapHandsToSelection(
+      pose({ extendedCount: 1, x: 0.1 }),
+      pose({ extendedCount: 0, fist: true }),
+      { ...cfg, twoHand: true }
+    );
+    expect(sel.degree).toBe(0);
+    expect(sel.chord?.label).toBe("I");
   });
 });
