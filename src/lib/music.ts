@@ -1,4 +1,4 @@
-// music.ts — pure music theory helpers: equal-temperament note→frequency,
+// music.ts - pure music theory helpers: equal-temperament note→frequency,
 // scale + chord construction (major/minor triads + sevenths), key selection.
 //
 // Conventions:
@@ -377,7 +377,7 @@ function voice(
  *
  * @param symbol    e.g. "Am", "E", "Cmaj7", "F6", "Bdim", "Csus4"
  * @param octave    octave of the root (default 4)
- * @param inversion voicing inversion (default 0) — reuses hand-X inversion
+ * @param inversion voicing inversion (default 0) - reuses hand-X inversion
  */
 export function parseChord(
   symbol: string,

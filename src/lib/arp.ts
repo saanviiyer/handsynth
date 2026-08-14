@@ -1,4 +1,4 @@
-// arp.ts — arpeggiator: pure sequence generation + a Web Audio lookahead
+// arp.ts - arpeggiator: pure sequence generation + a Web Audio lookahead
 // scheduler ("A Tale of Two Clocks"). The sequence generator is pure and
 // testable; the scheduler drives Synth.triggerNote at precise AudioContext
 // times.

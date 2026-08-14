@@ -39,7 +39,7 @@ describe("pitch/name conversion", () => {
   });
 });
 
-describe("diatonic chord construction — C major", () => {
+describe("diatonic chord construction - C major", () => {
   const key: KeyConfig = { tonic: 0, scale: "major", octave: 4 };
 
   it("I is C major triad C4 E4 G4 with correct intervals", () => {
@@ -107,7 +107,7 @@ describe("diatonic chord construction — C major", () => {
   });
 });
 
-describe("diatonic chord construction — A minor", () => {
+describe("diatonic chord construction - A minor", () => {
   const key: KeyConfig = { tonic: 9, scale: "minor", octave: 4 };
 
   it("i is A minor triad A4 C5 E5", () => {
@@ -136,7 +136,7 @@ describe("inversions", () => {
   });
 });
 
-describe("chord extensions — 6th and 7th (diatonic)", () => {
+describe("chord extensions - 6th and 7th (diatonic)", () => {
   const cmaj: KeyConfig = { tonic: 0, scale: "major", octave: 4 };
   const amin: KeyConfig = { tonic: 9, scale: "minor", octave: 4 };
 

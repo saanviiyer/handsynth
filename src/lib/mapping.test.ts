@@ -95,7 +95,7 @@ describe("mapHandsToSelection", () => {
     expect(sel.chord?.label).toBe("vii°");
   });
 
-  it("two-hand diatonic: a closed/low left hand adds no offset (still I–V)", () => {
+  it("two-hand diatonic: a closed/low left hand adds no offset (still I-V)", () => {
     const sel = mapHandsToSelection(
       pose({ extendedCount: 1, x: 0.1 }),
       pose({ extendedCount: 0, fist: true }),

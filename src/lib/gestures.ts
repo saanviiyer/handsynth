@@ -1,4 +1,4 @@
-// gestures.ts — pure functions over MediaPipe hand landmarks.
+// gestures.ts - pure functions over MediaPipe hand landmarks.
 //
 // MediaPipe HandLandmarker returns 21 landmarks per hand, each normalized to
 // the image: x,y in [0,1] (x right, y down), z relative depth. Index map:
@@ -76,7 +76,7 @@ export function isFist(lm: Landmark[]): boolean {
 }
 
 /**
- * Thumb–index pinch distance, normalized by hand size so it is roughly
+ * Thumb-index pinch distance, normalized by hand size so it is roughly
  * scale-invariant. ~0 when pinched, ~1.5+ when wide open.
  */
 export function pinchDistance(lm: Landmark[]): number {

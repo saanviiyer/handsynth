@@ -1,4 +1,4 @@
-// handLandmarker.ts — initialize MediaPipe HandLandmarker in VIDEO mode.
+// handLandmarker.ts - initialize MediaPipe HandLandmarker in VIDEO mode.
 //
 // Deploy wiring:
 //  - WASM fileset is vendored into public/wasm at install time by

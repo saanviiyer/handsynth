@@ -1,4 +1,4 @@
-// mapping.ts — pure translation from hand pose(s) to a musical selection.
+// mapping.ts - pure translation from hand pose(s) to a musical selection.
 // Kept separate from gesture geometry (gestures.ts) and audio (synth.ts) so the
 // full gesture→chord mapping can be unit tested without a DOM or AudioContext.
 
@@ -117,7 +117,7 @@ export function mapHandsToSelection(
 
   // The two-hand modifier now serves the SAME role in both modes: an open left
   // hand adds a +5 offset to the right hand's index. In diatonic mode this
-  // reaches degrees vi/vii; in progression mode it reaches slots 6–10. (This
+  // reaches degrees vi/vii; in progression mode it reaches slots 6-10. (This
   // replaces the previous two-hand octave-shift in diatonic mode, prioritizing
   // access to all seven diatonic degrees.) octaveShift is retained on the
   // Selection for back-compat but is always 0.
