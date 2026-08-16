@@ -205,6 +205,47 @@ enabling/disabling click-free. A **Voice sensitivity** slider scales the mic
 gain. If mic permission is denied it falls back to direct play and shows a clear
 message (mirroring the camera-denied handling).
 
+## Looper (vocal + instrument, with harmony stacking)
+
+The **Looper** panel records short loops and overdubs more takes on top so you
+can stack vocal harmonies (or layer synth parts) into one arrangement.
+
+- **Source per take**: **Mic** (your voice), **Instrument** (the gesture-played
+  synth output chain), or **Mix** (both). The looper shares the single
+  microphone stream with the vocoder, so only one `getUserMedia` prompt is used.
+- **Loop length**: beat-locked to the shared transport BPM in **bars** (1, 2, 4,
+  or 8), or **Free** mode where the first take sets the length. An optional
+  **count-in** plays one bar of metronome clicks before capture.
+- **Overdub / stacking**: each take becomes its own loop track that plays while
+  you record the next one, so you can build harmonies. Per-track **mute**,
+  **solo**, **volume**, **Save** (download that take), and **Del**; plus a
+  **Clear all** and a live **track count**.
+- **Play all / Stop all**: master transport for the finished stack; all
+  non-muted tracks (respecting solo) start phase-locked and loop as one.
+- **Export mix**: one click bounces the summed non-muted tracks for a selectable
+  number of loop **cycles** (default 1) to a timestamped `.wav` download.
+
+**Capture** uses a `ScriptProcessorNode` (reliable and simple to wire through
+Vite, no extra AudioWorklet build) that copies the chosen source's Float32
+samples into a fixed-length loop buffer.
+
+**No feedback**: an Instrument take taps the synth **instrument bus** (synth +
+effects + vocoder + drums) which does *not* include the loop tracks, so a loop
+never records itself. Loop tracks route to the **record bus**, so the master
+**Record** still captures the full mix (synth + effects + vocoder + drums +
+loops).
+
+**Phase-lock**: the first take sets the loop length and start anchor; every
+later take and every Play-all starts on the next loop boundary
+(`nextLoopBoundary`), so all tracks stay aligned. **Export** renders through an
+`OfflineAudioContext` (fast, click-free) summing each track at its effective
+gain. The pure math (loop length from BPM x bars, mute/solo/volume mix, boundary
+alignment, export duration, source selection, WAV encoding) lives in
+`src/lib/vocalLooper.ts` and is unit tested.
+
+The looper needs a **real microphone** for Mic and Mix takes; mic-permission
+denial is handled gracefully with an on-panel message.
+
 ## Sound design
 
 Open the **Sound design** panel to reshape the synth. Everything is param-ramped
@@ -269,8 +310,10 @@ The pure, testable logic lives under `src/lib/`:
 - `src/lib/smoothing.ts`: One-Euro filter + EMA landmark smoothing (pure, tested)
 - `src/lib/presets.ts`: sound-preset tables + param helpers (pure, tested)
 - `src/lib/synth.ts`: polyphonic Web Audio engine (unison, sub, ADSR, filter,
-  LFO, effects chain, drum voices, master + dry + record bus)
+  LFO, effects chain, drum voices, instrument bus + record bus)
 - `src/lib/vocoder.ts`: channel vocoder audio graph
+- `src/lib/vocalLooper.ts`: loop capture, overdub stacking, phase-lock, and
+  OfflineAudioContext export (pure helpers tested)
 - `src/lib/handLandmarker.ts`: MediaPipe init with local-then-CDN asset loading
 
 ## How the model / WASM are wired for deploy
