@@ -97,9 +97,11 @@ export class Synth {
   private master: GainNode | null = null;
   private filter: BiquadFilterNode | null = null;
   private dry: GainNode | null = null;
-  // Output bus that both the dry path and the vocoder wet path feed, and which
-  // the recorder taps, so a recording captures the full chain (effects +
-  // vocoder + drums).
+  // instrumentBus carries the *played* signal (synth + effects + vocoder +
+  // drums) but NOT the loop-playback tracks, so the looper can tap it to record
+  // an "Instrument" loop without feeding loops back into themselves.
+  // recordBus = instrumentBus + loop tracks; the master recorder taps recordBus.
+  private instrumentBus: GainNode | null = null;
   private recordBus: GainNode | null = null;
   private drumBus: GainNode | null = null;
   private recorderDest: MediaStreamAudioDestinationNode | null = null;
@@ -262,16 +264,20 @@ export class Synth {
       this.reverb.output.connect(this.tremolo);
       this.tremolo.connect(this.master);
 
-      // Output bus: master -> dry -> recordBus -> destination. The vocoder wet
-      // path and the drum bus also feed recordBus, so recording captures them.
+      // instrumentBus = master (synth+effects) + drums + vocoder wet. recordBus
+      // = instrumentBus + loop tracks -> destination. The master recorder taps
+      // recordBus; the looper taps instrumentBus for "Instrument" loops (so a
+      // loop never records itself -> no feedback).
+      this.instrumentBus = ctx.createGain();
       this.recordBus = ctx.createGain();
       this.master.connect(this.dry);
-      this.dry.connect(this.recordBus);
+      this.dry.connect(this.instrumentBus);
+      this.instrumentBus.connect(this.recordBus);
       this.recordBus.connect(ctx.destination);
 
       this.drumBus = ctx.createGain();
       this.drumBus.gain.value = 0.9;
-      this.drumBus.connect(this.recordBus);
+      this.drumBus.connect(this.instrumentBus);
     }
     if (this.ctx.state === "suspended") {
       await this.ctx.resume();
@@ -573,11 +579,20 @@ export class Synth {
   }
 
   /**
-   * The output bus that carries the full mix (dry synth + vocoder + drums).
-   * The vocoder should connect its wet path here so recording captures it.
+   * The master mix bus (instrument mix + loop tracks). Loop-playback tracks
+   * connect here so the master recorder captures them.
    */
   getOutputBus(): GainNode | null {
     return this.recordBus;
+  }
+
+  /**
+   * The instrument bus: the played signal (synth + effects + vocoder + drums)
+   * WITHOUT the loop tracks. The vocoder connects its wet path here, and the
+   * looper taps it to record an "Instrument" loop with no feedback path.
+   */
+  getInstrumentBus(): GainNode | null {
+    return this.instrumentBus;
   }
 
   /**
@@ -701,6 +716,7 @@ export class Synth {
       this.master = null;
       this.filter = null;
       this.dry = null;
+      this.instrumentBus = null;
       this.recordBus = null;
       this.drumBus = null;
       this.recorderDest = null;

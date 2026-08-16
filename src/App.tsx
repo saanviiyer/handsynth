@@ -40,6 +40,11 @@ import {
 } from "./lib/drums";
 import { LandmarkSmoother } from "./lib/smoothing";
 import { Vocoder } from "./lib/vocoder";
+import {
+  VocalLooper,
+  type RecordSource,
+  type LoopTrackState,
+} from "./lib/vocalLooper";
 import { drawHand } from "./lib/draw";
 import { Legend } from "./Legend";
 
@@ -194,6 +199,7 @@ export default function App() {
   const chunksRef = useRef<Blob[]>([]);
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordStartRef = useRef<number>(0);
+  const looperRef = useRef<VocalLooper | null>(null);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [status, setStatus] = useState<string>("");
@@ -243,6 +249,17 @@ export default function App() {
   const [vocoderOn, setVocoderOn] = useState<boolean>(false);
   const [micGain, setMicGain] = useState<number>(1);
   const [micError, setMicError] = useState<string>("");
+
+  // Vocal looper
+  const [loopSource, setLoopSource] = useState<RecordSource>("mic");
+  const [loopBars, setLoopBars] = useState<number>(2);
+  const [loopFree, setLoopFree] = useState<boolean>(false);
+  const [loopCountIn, setLoopCountIn] = useState<boolean>(true);
+  const [loopRecording, setLoopRecording] = useState<boolean>(false);
+  const [loopPlaying, setLoopPlaying] = useState<boolean>(false);
+  const [loopTracks, setLoopTracks] = useState<LoopTrackState[]>([]);
+  const [loopError, setLoopError] = useState<string>("");
+  const [exportCycles, setExportCycles] = useState<number>(1);
 
   // Live readout
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -374,6 +391,14 @@ export default function App() {
   useEffect(() => {
     vocoderRef.current?.setMicGain(micGain);
   }, [micGain]);
+
+  // Keep the looper config synced (shares the transport BPM with arp/drums).
+  useEffect(() => {
+    looperRef.current?.setConfig({ bpm: arpBpm, bars: loopBars, free: loopFree });
+  }, [arpBpm, loopBars, loopFree]);
+  useEffect(() => {
+    looperRef.current?.setRecordSource(loopSource);
+  }, [loopSource]);
 
   const loop = useCallback(() => {
     const video = videoRef.current;
@@ -512,6 +537,26 @@ export default function App() {
         drumsRef.current.setMetronome(metronomeOn);
         if (drumsOn || metronomeOn) drumsRef.current.start();
       }
+      if (audioCtx && !looperRef.current) {
+        const s = synthRef.current;
+        // Loop tracks feed the master mix bus (so the master recorder captures
+        // them); the "Instrument" tap reads the feedback-safe instrument bus.
+        const out = s.getOutputBus() ?? audioCtx.destination;
+        looperRef.current = new VocalLooper(audioCtx, out, (t, accent) =>
+          s.triggerClick(t, accent)
+        );
+        const instr = s.getInstrumentBus();
+        if (instr) looperRef.current.setInstrumentNode(instr);
+        looperRef.current.setConfig({ bpm: arpBpm, bars: loopBars, free: loopFree });
+        looperRef.current.setRecordSource(loopSource);
+        looperRef.current.onChange = () => {
+          const lp = looperRef.current;
+          if (!lp) return;
+          setLoopTracks(lp.getStates());
+          setLoopRecording(lp.isRecording);
+          setLoopPlaying(lp.isPlaying);
+        };
+      }
       for (const sm of smoothersRef.current) sm.setAmount(smoothing);
 
       setPhase("loading-model");
@@ -563,7 +608,19 @@ export default function App() {
     metronomeOn,
     drumsOn,
     smoothing,
+    loopBars,
+    loopFree,
+    loopSource,
   ]);
+
+  // Acquire the microphone once and share it between the vocoder and looper so
+  // we never open two conflicting getUserMedia streams.
+  const getSharedMic = useCallback(async (): Promise<MediaStream> => {
+    if (micStreamRef.current) return micStreamRef.current;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micStreamRef.current = stream;
+    return stream;
+  }, []);
 
   // Toggle the vocoder: request mic on enable, crossfade the wet/dry path.
   const toggleVocoder = useCallback(
@@ -580,9 +637,8 @@ export default function App() {
           v.stop((val) => synth.setDryGain(val));
           setTimeout(() => {
             v.dispose();
-            micStreamRef.current?.getTracks().forEach((t) => t.stop());
-            micStreamRef.current = null;
             vocoderRef.current = null;
+            // Leave the shared mic open; the looper may still be using it.
           }, 200);
         }
         return;
@@ -595,7 +651,7 @@ export default function App() {
 
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await getSharedMic();
       } catch (err) {
         setVocoderOn(false);
         setMicError(
@@ -606,10 +662,10 @@ export default function App() {
         return;
       }
 
-      micStreamRef.current = stream;
-      // Route the vocoder into the synth output bus (not directly to the
-      // destination) so recordings capture the vocoded signal too.
-      const out = synth.getOutputBus() ?? audioCtx.destination;
+      // Route the vocoder into the instrument bus so it is part of the played
+      // signal (captured by the master recorder and by "Instrument" loop takes).
+      const out =
+        synth.getInstrumentBus() ?? synth.getOutputBus() ?? audioCtx.destination;
       const voc = new Vocoder(audioCtx, carrier, out, {
         bands: 16,
       });
@@ -619,7 +675,7 @@ export default function App() {
       vocoderRef.current = voc;
       setVocoderOn(true);
     },
-    [micGain]
+    [micGain, getSharedMic]
   );
 
   // Record the full output (effects + vocoder + drums) via MediaRecorder.
@@ -699,11 +755,82 @@ export default function App() {
     setRecording(false);
   }, []);
 
+  // --- Vocal looper handlers ---
+  const downloadBytes = (bytes: ArrayBuffer, name: string) => {
+    const blob = new Blob([bytes], { type: "audio/wav" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const stamp = () =>
+    new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+
+  const toggleLoopRecord = useCallback(async () => {
+    setLoopError("");
+    const lp = looperRef.current;
+    if (!lp) {
+      setLoopError("Start the app (Enable camera & sound) first.");
+      return;
+    }
+    if (lp.isRecording) {
+      lp.stopRecording();
+      return;
+    }
+    // Ensure the mic for any source that needs it.
+    if (loopSource === "mic" || loopSource === "mix") {
+      try {
+        const stream = await getSharedMic();
+        lp.setMicStream(stream);
+      } catch (err) {
+        setLoopError(
+          err instanceof Error
+            ? `Microphone unavailable: ${err.message}`
+            : "Microphone permission denied."
+        );
+        return;
+      }
+    }
+    lp.setConfig({ bpm: arpBpm, bars: loopBars, free: loopFree });
+    lp.setRecordSource(loopSource);
+    if (!lp.canRecord()) {
+      setLoopError("Selected source is not available.");
+      return;
+    }
+    lp.arm(loopCountIn ? 1 : 0);
+  }, [loopSource, arpBpm, loopBars, loopFree, loopCountIn, getSharedMic]);
+
+  const downloadTake = useCallback((id: number) => {
+    const lp = looperRef.current;
+    const bytes = lp?.getTrackWav(id);
+    if (bytes) downloadBytes(bytes, `handsynth-take-${id}-${stamp()}.wav`);
+  }, []);
+
+  const exportMix = useCallback(async () => {
+    const lp = looperRef.current;
+    if (!lp) return;
+    setLoopError("");
+    try {
+      const bytes = await lp.exportMix(exportCycles);
+      if (bytes) downloadBytes(bytes, `handsynth-loop-mix-${stamp()}.wav`);
+      else setLoopError("Nothing to export yet.");
+    } catch (err) {
+      setLoopError(
+        err instanceof Error ? err.message : "Export failed."
+      );
+    }
+  }, [exportCycles]);
+
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       arpRef.current?.stop();
       drumsRef.current?.stop();
+      looperRef.current?.dispose();
       if (recordTimerRef.current) clearInterval(recordTimerRef.current);
       if (recorderRef.current && recorderRef.current.state !== "inactive") {
         try {
@@ -1716,6 +1843,249 @@ export default function App() {
                 className="w-full"
               />
             </label>
+          </section>
+
+          {/* Vocal looper */}
+          <section className="rounded-2xl border border-magenta/30 bg-purple/15 p-4">
+            <details>
+              <summary className="cursor-pointer list-none text-sm font-semibold uppercase tracking-wide text-white/70">
+                Looper{" "}
+                <span className="text-white/40">({loopTracks.length})</span>
+                {loopRecording && (
+                  <span className="text-orange"> recording</span>
+                )}
+              </summary>
+
+              <div className="mt-3">
+                {/* Source */}
+                <div className="mb-3 text-sm">
+                  <span className="mb-1 block text-white/70">Source</span>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(
+                      [
+                        ["mic", "Mic"],
+                        ["instrument", "Instrument"],
+                        ["mix", "Mix"],
+                      ] as [RecordSource, string][]
+                    ).map(([s, label]) => (
+                      <button
+                        key={s}
+                        onClick={() => setLoopSource(s)}
+                        className={`rounded-md px-2 py-1 text-xs font-medium transition ${
+                          loopSource === s
+                            ? "bg-yellow text-ink"
+                            : "bg-purple/25 text-white/90 hover:bg-magenta/40"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Loop length */}
+                <div className="mb-3 text-sm">
+                  <span className="mb-1 block text-white/70">Loop length</span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {[1, 2, 4, 8].map((b) => (
+                      <button
+                        key={b}
+                        disabled={loopFree}
+                        onClick={() => setLoopBars(b)}
+                        className={`rounded-md px-2 py-1 text-xs font-medium transition ${
+                          loopFree
+                            ? "cursor-not-allowed bg-purple/10 text-white/30"
+                            : loopBars === b
+                              ? "bg-magenta text-ink"
+                              : "bg-purple/25 text-white/90 hover:bg-magenta/40"
+                        }`}
+                      >
+                        {b} {b === 1 ? "bar" : "bars"}
+                      </button>
+                    ))}
+                    <label className="ml-1 flex items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        checked={loopFree}
+                        onChange={(e) => setLoopFree(e.target.checked)}
+                      />
+                      Free
+                    </label>
+                  </div>
+                  <label className="mt-2 flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={loopCountIn}
+                      onChange={(e) => setLoopCountIn(e.target.checked)}
+                    />
+                    Count-in (1 bar)
+                  </label>
+                </div>
+
+                {/* Transport */}
+                <div className="mb-3 flex flex-wrap gap-2">
+                  <button
+                    onClick={toggleLoopRecord}
+                    disabled={!started}
+                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                      !started
+                        ? "cursor-not-allowed bg-purple/25 text-white/40"
+                        : loopRecording
+                          ? "bg-orange text-ink hover:bg-yellow"
+                          : "bg-magenta text-ink hover:bg-magenta/80"
+                    }`}
+                  >
+                    {loopRecording ? "Stop take" : "Record take"}
+                  </button>
+                  <button
+                    onClick={() =>
+                      loopPlaying
+                        ? looperRef.current?.stopAll()
+                        : looperRef.current?.playAll()
+                    }
+                    disabled={loopTracks.length === 0}
+                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                      loopTracks.length === 0
+                        ? "cursor-not-allowed bg-purple/25 text-white/40"
+                        : "bg-purple/45 text-white hover:bg-magenta/40"
+                    }`}
+                  >
+                    {loopPlaying ? "Stop all" : "Play all"}
+                  </button>
+                  <button
+                    onClick={() => looperRef.current?.clearAll()}
+                    disabled={loopTracks.length === 0}
+                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                      loopTracks.length === 0
+                        ? "cursor-not-allowed bg-purple/25 text-white/40"
+                        : "bg-purple/45 text-white hover:bg-magenta/40"
+                    }`}
+                  >
+                    Clear all
+                  </button>
+                </div>
+
+                {/* Track list */}
+                {loopTracks.length === 0 ? (
+                  <p className="text-xs text-white/55">
+                    No loops yet. Record a take to start a stack, then record
+                    more takes on top to build harmonies.
+                  </p>
+                ) : (
+                  <ul className="flex flex-col gap-2">
+                    {loopTracks.map((t) => (
+                      <li
+                        key={t.id}
+                        className="rounded-lg border border-magenta/20 bg-purple/10 p-2"
+                      >
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-white/90">
+                            {t.name}{" "}
+                            <span className="text-xs text-white/40">
+                              ({t.source})
+                            </span>
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() =>
+                                looperRef.current?.setMute(t.id, !t.muted)
+                              }
+                              className={`rounded px-2 py-0.5 text-xs font-medium ${
+                                t.muted
+                                  ? "bg-orange text-ink"
+                                  : "bg-purple/25 text-white/80 hover:bg-magenta/40"
+                              }`}
+                            >
+                              M
+                            </button>
+                            <button
+                              onClick={() =>
+                                looperRef.current?.setSolo(t.id, !t.solo)
+                              }
+                              className={`rounded px-2 py-0.5 text-xs font-medium ${
+                                t.solo
+                                  ? "bg-yellow text-ink"
+                                  : "bg-purple/25 text-white/80 hover:bg-magenta/40"
+                              }`}
+                            >
+                              S
+                            </button>
+                            <button
+                              onClick={() => downloadTake(t.id)}
+                              className="rounded bg-purple/25 px-2 py-0.5 text-xs text-white/80 hover:bg-magenta/40"
+                              title="Download this take"
+                            >
+                              Save
+                            </button>
+                            <button
+                              onClick={() => looperRef.current?.deleteTrack(t.id)}
+                              className="rounded bg-purple/25 px-2 py-0.5 text-xs text-white/80 hover:bg-magenta/40"
+                              title="Delete this take"
+                            >
+                              Del
+                            </button>
+                          </div>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={t.volume}
+                          onChange={(e) =>
+                            looperRef.current?.setVolume(
+                              t.id,
+                              Number(e.target.value)
+                            )
+                          }
+                          className="mt-1 w-full"
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {/* Export */}
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+                  <span className="text-white/70">Export</span>
+                  <select
+                    value={exportCycles}
+                    onChange={(e) => setExportCycles(Number(e.target.value))}
+                    className="rounded-lg border border-purple/50 bg-purple/25 px-2 py-1"
+                  >
+                    {[1, 2, 4, 8].map((c) => (
+                      <option key={c} value={c}>
+                        {c} {c === 1 ? "cycle" : "cycles"}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={exportMix}
+                    disabled={loopTracks.length === 0}
+                    className={`rounded-lg px-3 py-1 text-sm font-medium transition ${
+                      loopTracks.length === 0
+                        ? "cursor-not-allowed bg-purple/25 text-white/40"
+                        : "bg-yellow text-ink hover:bg-orange"
+                    }`}
+                  >
+                    Export mix
+                  </button>
+                </div>
+
+                {!started && (
+                  <p className="mt-2 text-xs text-white/40">
+                    Enable camera &amp; sound first.
+                  </p>
+                )}
+                <p className="mt-2 text-xs text-white/55">
+                  Mic and Mix takes need a real microphone. Loops lock to the
+                  shared transport BPM and route through the master recorder.
+                </p>
+                {loopError && (
+                  <p className="mt-1 text-xs text-orange">{loopError}</p>
+                )}
+              </div>
+            </details>
           </section>
 
           <Legend mode={mode} twoHand={twoHand} />
