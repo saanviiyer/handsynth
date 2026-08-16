@@ -88,6 +88,28 @@ export function isPinching(lm: Landmark[], threshold = 0.35): boolean {
   return pinchDistance(lm) < threshold;
 }
 
+const FINGERTIPS = [4, 8, 12, 16, 20];
+
+/**
+ * Continuous hand openness in [0,1]: 0 = closed fist, 1 = wide-open hand.
+ *
+ * Metric: mean fingertip distance from the wrist, normalized by hand size, then
+ * remapped from a closed-hand baseline to a fully-open range. This is a smooth
+ * signal (unlike the discrete extended-finger count), which makes it well suited
+ * to driving a continuous parameter like the vocoder wet amount.
+ */
+export function handOpenness(lm: Landmark[]): number {
+  const size = handSize(lm);
+  let sum = 0;
+  for (const t of FINGERTIPS) sum += dist(lm[t], lm[WRIST]) / size;
+  const mean = sum / FINGERTIPS.length;
+  // Closed hand ~1.0, wide-open hand ~2.0 in wrist-distance/handSize units.
+  const lo = 1.1;
+  const hi = 1.9;
+  const o = (mean - lo) / (hi - lo);
+  return Math.max(0, Math.min(1, o));
+}
+
 export interface HandPose {
   /** Normalized hand center X in [0,1] (image space, x right). */
   x: number;
@@ -97,6 +119,8 @@ export interface HandPose {
   extendedCount: number;
   pinch: number;
   fist: boolean;
+  /** Continuous openness 0..1 (0 = fist, 1 = wide open). */
+  openness: number;
 }
 
 /** Palm center: mean of wrist + all four finger MCPs (5,9,13,17). */
@@ -123,5 +147,6 @@ export function readHand(lm: Landmark[]): HandPose {
     extendedCount: count,
     pinch: pinchDistance(lm),
     fist: count === 0,
+    openness: handOpenness(lm),
   };
 }

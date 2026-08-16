@@ -191,19 +191,39 @@ The **Playability** panel has two aids:
 
 ## Vocoder
 
-Toggle **Vocoder** to run the synth through a real Web Audio **channel
+Toggle **Vocoder** to run the synth through a real, strong Web Audio **channel
 vocoder**: your **microphone is the modulator** and the **synth is the
-carrier**: talk or sing and the chords take on the shape of your voice.
+carrier**: talk or sing and the chords take on the robotic shape of your voice.
 
-Implementation (`src/lib/vocoder.ts`): a bank of **16 bandpass filters**
-log-spaced ~120 Hz → ~7 kHz. For each band, the mic signal is band-passed →
-**rectified** (a `WaveShaper` with an `x → |x|` curve) → smoothed by a low-pass
-**envelope follower** (~18 Hz); that envelope drives the **gain of the carrier**
-passed through the matching band. All bands sum to the output. A **dry/wet
-crossfade** (`Synth.setDryGain` ↔ the vocoder's wet gain, both ramped) makes
-enabling/disabling click-free. A **Voice sensitivity** slider scales the mic
-gain. If mic permission is denied it falls back to direct play and shows a clear
-message (mirroring the camera-denied handling).
+Implementation (`src/lib/vocoder.ts`): a bank of **24 bandpass filters**
+log-spaced ~110 Hz → ~7.5 kHz (`bandFrequencies`, pure and tested). For each
+band, the mic signal is band-passed (tight **Q ~12** for clear formant
+separation) → **rectified** (a `WaveShaper` with an `x → |x|` curve) → smoothed
+by a fast low-pass **envelope follower** (~32 Hz); that envelope drives the
+**gain of the carrier** through the matching band. All bands sum into a
+**makeup gain**, then a **tanh soft-clip limiter** (so the boosted level stays
+robust without clipping), then the wet mix. A **dry/wet crossfade**
+(`Synth.setDryGain` ↔ the wet gain, both ramped) keeps enabling, disabling, and
+live wet changes click-free.
+
+Controls:
+
+- **Hand-controlled** (needs two-hand mode): the **left hand's openness** drives
+  the wet amount live. A closed/relaxed left hand (or no left hand) is **dry**;
+  opening the left hand brings the vocoder in to **full wet**. This uses only the
+  left hand, so it never conflicts with the right hand's finger-count chord
+  selection. The mapping is `handOpenness` (mean fingertip distance from the
+  wrist, normalized by hand size) run through `opennessToWet` (a smoothstep with
+  a small dead zone); both are pure and unit tested. The exact mapping is shown
+  in the on-screen gesture legend.
+- **Wet / dry** slider (manual fallback when hand control is off).
+- **Intensity** scales the envelope drive and makeup gain for a more or less
+  pronounced effect.
+- **Voice sensitivity** scales the mic input gain.
+
+The vocoder shares the single microphone stream with the looper (one
+`getUserMedia`). If mic permission is denied it falls back to direct play and
+shows a clear message (mirroring the camera-denied handling).
 
 ## Looper (vocal + instrument, with harmony stacking)
 

@@ -39,7 +39,7 @@ import {
   type DrumPatternName,
 } from "./lib/drums";
 import { LandmarkSmoother } from "./lib/smoothing";
-import { Vocoder } from "./lib/vocoder";
+import { Vocoder, opennessToWet } from "./lib/vocoder";
 import {
   VocalLooper,
   type RecordSource,
@@ -249,6 +249,9 @@ export default function App() {
   const [vocoderOn, setVocoderOn] = useState<boolean>(false);
   const [micGain, setMicGain] = useState<number>(1);
   const [micError, setMicError] = useState<string>("");
+  const [handVocoder, setHandVocoder] = useState<boolean>(false);
+  const [vocoderWet, setVocoderWet] = useState<number>(1);
+  const [vocoderStrength, setVocoderStrength] = useState<number>(1);
 
   // Vocal looper
   const [loopSource, setLoopSource] = useState<RecordSource>("mic");
@@ -281,6 +284,8 @@ export default function App() {
     twoHand,
     arpOn,
     latchOn,
+    handVocoder,
+    vocoderOn,
     progression: progressionSlots.map((s) => s.chord),
   });
   useEffect(() => {
@@ -293,6 +298,8 @@ export default function App() {
       twoHand,
       arpOn,
       latchOn,
+      handVocoder,
+      vocoderOn,
       progression: progressionSlots.map((s) => s.chord),
     };
   }, [
@@ -304,6 +311,8 @@ export default function App() {
     twoHand,
     arpOn,
     latchOn,
+    handVocoder,
+    vocoderOn,
     progressionSlots,
   ]);
 
@@ -391,6 +400,17 @@ export default function App() {
   useEffect(() => {
     vocoderRef.current?.setMicGain(micGain);
   }, [micGain]);
+  useEffect(() => {
+    vocoderRef.current?.setStrength(vocoderStrength);
+  }, [vocoderStrength]);
+  // Manual wet/dry slider drives the mix only when hand control is off.
+  useEffect(() => {
+    if (!handVocoder) {
+      vocoderRef.current?.setMix(vocoderWet, (v) =>
+        synthRef.current.setDryGain(v)
+      );
+    }
+  }, [vocoderWet, handVocoder]);
 
   // Keep the looper config synced (shares the transport BPM with arp/drums).
   useEffect(() => {
@@ -493,6 +513,16 @@ export default function App() {
         } else {
           arpRef.current?.setChord([]); // ensure arp is idle
           synth.playFreqs(freqs);
+        }
+
+        // Hand-controlled vocoder: the LEFT (modifier) hand's openness drives
+        // the wet amount live (open = full vocoder, closed / no left hand = dry).
+        // This uses the left hand only, so it never conflicts with the right
+        // hand's finger-count chord selection. setMix ramps, so it is click-free.
+        const voc = vocoderRef.current;
+        if (voc && c.vocoderOn && c.handVocoder) {
+          const openness = modHand ? modHand.openness : 0;
+          voc.setMix(opennessToWet(openness), (v) => synth.setDryGain(v));
         }
 
         setSelection(sel);
@@ -667,15 +697,21 @@ export default function App() {
       const out =
         synth.getInstrumentBus() ?? synth.getOutputBus() ?? audioCtx.destination;
       const voc = new Vocoder(audioCtx, carrier, out, {
-        bands: 16,
+        bands: 24,
+        strength: vocoderStrength,
       });
       voc.setModulatorStream(stream);
       voc.setMicGain(micGain);
-      voc.start((val) => synth.setDryGain(val));
+      // Hand mode starts dry (open your hand to bring it in); manual mode uses
+      // the wet/dry slider value.
+      voc.start(
+        (val) => synth.setDryGain(val),
+        handVocoder ? 0 : vocoderWet
+      );
       vocoderRef.current = voc;
       setVocoderOn(true);
     },
-    [micGain, getSharedMic]
+    [micGain, getSharedMic, vocoderStrength, handVocoder, vocoderWet]
   );
 
   // Record the full output (effects + vocoder + drums) via MediaRecorder.
@@ -1818,7 +1854,7 @@ export default function App() {
             </div>
             <p className="text-xs text-white/55">
               Uses your microphone as the modulator and the synth as the
-              carrier: talk or sing to shape the chords.
+              carrier: talk or sing for a strong robotic vocoder (24 bands).
             </p>
             {!started && (
               <p className="mt-2 text-xs text-white/40">
@@ -1828,7 +1864,65 @@ export default function App() {
             {micError && (
               <p className="mt-2 text-xs text-orange">{micError}</p>
             )}
-            <label className={`mt-3 block text-sm ${vocoderOn ? "" : "opacity-50"}`}>
+
+            <label className="mt-3 flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={handVocoder}
+                onChange={(e) => setHandVocoder(e.target.checked)}
+              />
+              Hand-controlled{" "}
+              <span className="text-xs text-white/55">
+                (left hand openness = wet)
+              </span>
+            </label>
+            <p className="mt-1 text-xs text-white/55">
+              In two-hand mode, open your left hand to bring the vocoder in;
+              a closed left hand (or no left hand) is dry.
+            </p>
+
+            <label
+              className={`mt-3 block text-sm ${
+                vocoderOn && !handVocoder ? "" : "opacity-50"
+              }`}
+            >
+              <span className="mb-1 block text-white/70">
+                Wet / dry: {(vocoderWet * 100).toFixed(0)}%
+                {handVocoder && (
+                  <span className="ml-1 text-xs text-white/40">
+                    (hand-controlled)
+                  </span>
+                )}
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                disabled={!vocoderOn || handVocoder}
+                value={vocoderWet}
+                onChange={(e) => setVocoderWet(Number(e.target.value))}
+                className="w-full"
+              />
+            </label>
+
+            <label className={`mt-2 block text-sm ${vocoderOn ? "" : "opacity-50"}`}>
+              <span className="mb-1 block text-white/70">
+                Intensity: {vocoderStrength.toFixed(2)}×
+              </span>
+              <input
+                type="range"
+                min={0.25}
+                max={3}
+                step={0.05}
+                disabled={!vocoderOn}
+                value={vocoderStrength}
+                onChange={(e) => setVocoderStrength(Number(e.target.value))}
+                className="w-full"
+              />
+            </label>
+
+            <label className={`mt-2 block text-sm ${vocoderOn ? "" : "opacity-50"}`}>
               <span className="mb-1 block text-white/70">
                 Voice sensitivity: {micGain.toFixed(1)}×
               </span>
@@ -2088,7 +2182,7 @@ export default function App() {
             </details>
           </section>
 
-          <Legend mode={mode} twoHand={twoHand} />
+          <Legend mode={mode} twoHand={twoHand} handVocoder={handVocoder} />
         </aside>
       </div>
 
