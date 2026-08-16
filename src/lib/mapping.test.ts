@@ -16,6 +16,7 @@ function pose(p: Partial<HandPose>): HandPose {
     extendedCount: 1,
     pinch: 0.8,
     fist: false,
+    openness: 0.2,
     ...p,
   };
 }

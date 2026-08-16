@@ -6,6 +6,7 @@ import {
   pinchDistance,
   isPinching,
   readHand,
+  handOpenness,
   type Landmark,
 } from "./gestures";
 
@@ -151,5 +152,32 @@ describe("readHand summary", () => {
 
   it("fist pose flags rest", () => {
     expect(readHand(FIST).fist).toBe(true);
+  });
+});
+
+describe("handOpenness", () => {
+  it("is high for an open hand and low for a fist", () => {
+    const open = handOpenness(OPEN_HAND);
+    const closed = handOpenness(FIST);
+    expect(open).toBeGreaterThan(0.6);
+    expect(closed).toBeLessThan(0.3);
+    expect(open).toBeGreaterThan(closed);
+  });
+
+  it("is clamped to [0,1]", () => {
+    for (const h of [OPEN_HAND, FIST, TWO_FINGERS, PINCH]) {
+      const o = handOpenness(h);
+      expect(o).toBeGreaterThanOrEqual(0);
+      expect(o).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("is scale-invariant (normalized by hand size)", () => {
+    const scaled = OPEN_HAND.map((p) => ({ x: p.x * 0.5, y: p.y * 0.5 }));
+    expect(handOpenness(scaled)).toBeCloseTo(handOpenness(OPEN_HAND), 6);
+  });
+
+  it("is exposed on the HandPose from readHand", () => {
+    expect(readHand(OPEN_HAND).openness).toBeGreaterThan(0.6);
   });
 });
