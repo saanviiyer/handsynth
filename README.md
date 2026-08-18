@@ -1,5 +1,10 @@
 # handsynth
 
+> **Consolidated into Trackstar.** Trackstar is the canonical music product and
+> includes this complete gesture instrument as Simple mode alongside its
+> producer mixer and deejai features. This directory remains as the preserved
+> original implementation and migration reference.
+
 Play synth chords with your hands. Your webcam feeds a computer-vision hand
 tracker; the shape and position of your hand pick and play chords through a
 Web Audio synth. **Everything runs in the browser**: no backend, no API keys,
@@ -30,6 +35,12 @@ npm run build      # tsc + vite build -> dist/ (zero TS errors)
 npm run preview    # serve the production build locally
 npm test           # vitest unit tests (music, parser, gestures, arp, mapping)
 ```
+
+## Deploy
+
+Import this directory into Vercel or Netlify. The checked-in host configs build
+and serve `dist/` as an SPA. Both provide HTTPS, which is required for camera
+access outside localhost.
 
 ## Two play modes
 
