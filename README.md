@@ -42,6 +42,19 @@ Import this directory into Vercel or Netlify. The checked-in host configs build
 and serve `dist/` as an SPA. Both provide HTTPS, which is required for camera
 access outside localhost.
 
+## Run on Replit
+
+1. In Replit, choose "Import from GitHub" and point it at this repo.
+2. Press **Run**. The `.replit` config runs `npm install && npm run build && npm run preview`, which installs dependencies (the postinstall step vendors the MediaPipe WASM fileset and downloads the hand model), builds the app, and serves the built output.
+3. When the app opens, **allow camera and microphone** access. Replit serves over HTTPS, which browsers require for camera and mic outside localhost.
+
+Notes:
+
+- We serve the **built** app (`npm run preview`) rather than the dev server, which is more reliable on Replit.
+- The preview server binds to `0.0.0.0:4173` and Vite is configured with `preview.allowedHosts: true`, so requests from `*.replit.dev` / `*.replit.app` / `*.repl.co` hosts are not rejected with "Blocked request. This host is not allowed".
+- Port `4173` is mapped to external port `80` in `.replit`.
+- A Replit Deployment also works: the `[deployment]` section builds the app and serves `dist/` as a static site.
+
 ## Two play modes
 
 Switch between them with the **Mode** control.
