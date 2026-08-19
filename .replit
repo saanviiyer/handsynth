@@ -1,0 +1,17 @@
+modules = ["nodejs-20"]
+
+# Build the app, then serve the built output with Vite's preview server.
+# Serving the built app is more reliable on Replit than the dev server.
+run = "npm install && npm run build && npm run preview"
+
+[[ports]]
+localPort = 4173
+externalPort = 80
+
+[deployment]
+# A Replit Deployment serves the static built output in dist/.
+# The build step installs deps (postinstall vendors the WASM + model) and
+# produces the dist/ folder.
+deploymentTarget = "static"
+publicDir = "dist"
+build = ["sh", "-c", "npm install && npm run build"]
